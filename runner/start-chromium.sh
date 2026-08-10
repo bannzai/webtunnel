@@ -23,12 +23,13 @@ CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || com
 echo "chrome: $CHROME_BIN ($("$CHROME_BIN" --version))"
 
 nohup Xvfb "$DISPLAY_NUM" -screen 0 "$SCREEN_SIZE" >"$WORK/xvfb.log" 2>&1 &
-# Xvfb の起動完了を待つ（xdpyinfo が応答するまで）
+# Xvfb の起動完了を待つ（xdpyinfo は runner に無いため、X ソケットが生えるのを確認する）
+X_SOCKET="/tmp/.X11-unix/X${DISPLAY_NUM#:}"
 for _ in $(seq 1 30); do
-  if DISPLAY="$DISPLAY_NUM" xdpyinfo >/dev/null 2>&1; then break; fi
+  [ -S "$X_SOCKET" ] && break
   sleep 1
 done
-DISPLAY="$DISPLAY_NUM" xdpyinfo >/dev/null 2>&1 || { echo "Xvfb が起動しない" >&2; cat "$WORK/xvfb.log" >&2; exit 1; }
+[ -S "$X_SOCKET" ] || { echo "Xvfb が起動しない" >&2; cat "$WORK/xvfb.log" >&2; exit 1; }
 
 # 後続 step（録画・keepalive）へ引き継ぐ
 echo "DISPLAY=$DISPLAY_NUM" >> "$GITHUB_ENV"
