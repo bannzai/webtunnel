@@ -5,12 +5,34 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 ## 目的
 
 - ローカルマシンのリソースを消費せずに、ブラウザでの動作確認を GHA runner 上で行う
-- agent-browser の CDP 接続（`--cdp`）で、tailnet 越しに runner 上の Chromium を操作する想定（要検証）
-- 動作確認の過程（スクリーンショット・録画）を artifact として PR に残す
+- agent-browser の CDP 接続（`--cdp`）で、tailnet 越しに runner 上の Chromium を操作する
+- 動作確認の過程（録画）を artifact として PR に残す
+
+## 使い方
+
+```bash
+# セッション起動（CDP が応答するまで待つ）
+local/webtunnel up dev --wait
+
+# 接続情報（tailscale IP ベースの CDP URL）を表示
+local/webtunnel cdp dev
+
+# agent-browser で操作（--session は作業スペース名にする）
+agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
+  --cdp http://<tailscale IP>:9222 open https://example.com
+
+# スクリーンショット
+local/webtunnel screenshot dev ./tmp/check.png
+
+# 終了（録画が artifact recording-<session> に残る）
+local/webtunnel down dev
+```
+
+CDP は Host ヘッダの制約で MagicDNS 名では接続できないため、接続は tailscale IP で行う（詳細と設計全体は PROJECT.md 参照）。
 
 ## Status
 
-構想段階。設計・実装は未着手。
+Phase 1（疎通）実装済み。設計の SSOT は PROJECT.md。
 
 ## 経緯
 
