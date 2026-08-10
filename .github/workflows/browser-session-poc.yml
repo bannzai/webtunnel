@@ -1,0 +1,23 @@
+# Phase 1 疎通検証用の一時 workflow。検証完了後に削除する。
+# workflow_dispatch はデフォルトブランチに workflow が無いと叩けないため、
+# feature ブランチへの push トリガーで session.yml を検証する（simtunnel の PoC と同じ手法）。
+name: browser-session-poc
+run-name: "session=poc-dev duration=30m"
+
+on:
+  push:
+    branches: [implement-webtunnel]
+
+jobs:
+  session:
+    permissions:
+      id-token: write # Tailscale の OIDC (workload identity federation) 認証に必要
+      contents: read
+    uses: ./.github/workflows/session.yml
+    with:
+      session: poc-dev
+      duration_minutes: "30"
+      start_url: https://example.com
+    secrets:
+      TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+      TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
