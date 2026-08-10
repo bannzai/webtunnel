@@ -1,0 +1,179 @@
+#!/bin/bash
+# WebTunnel ローカル CLI。GHA 上の Chromium (CDP) セッションを管理する。
+#
+# 使い方:
+#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--wait]
+#   webtunnel down <session>
+#   webtunnel list
+#   webtunnel status <session>
+#   webtunnel cdp <session>                  # CDP の URL と agent-browser の接続例を表示
+#   webtunnel screenshot <session> [出力パス]  # agent-browser 経由でスクリーンショットを保存
+#
+# CDP は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、
+# MagicDNS 名（webtunnel-<session>）ではなく tailscale IP で接続する（PROJECT.md「CDP の Host ヘッダ制約」参照）。
+#
+# 対象リポジトリの切り替え（各アプリ repo の caller workflow を叩く場合）:
+#   WEBTUNNEL_REPO=<owner>/<repo> [WEBTUNNEL_WORKFLOW=browser-session.yml] webtunnel up <session>
+set -euo pipefail
+
+REPO="${WEBTUNNEL_REPO:-bannzai/webtunnel}"
+WORKFLOW="${WEBTUNNEL_WORKFLOW:-browser-session.yml}"
+CDP_PORT=9222
+
+ts_bin() {
+  if command -v tailscale >/dev/null 2>&1; then
+    echo "tailscale"
+  else
+    echo "/Applications/Tailscale.app/Contents/MacOS/Tailscale"
+  fi
+}
+
+# tailnet に参加している webtunnel-<session> の IP を返す（未参加なら空）
+session_ip() {
+  local session=$1
+  "$(ts_bin)" status 2>/dev/null | awk -v h="webtunnel-${session}" '$2 == h {print $1; exit}'
+}
+
+# session 名に一致する実行中/待機中の run ID を列挙する
+session_run_ids() {
+  local session=$1
+  gh run list -R "$REPO" --workflow "$WORKFLOW" \
+    --json databaseId,displayTitle,status \
+    --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${session} \")) | .databaseId"
+}
+
+cmd_up() {
+  local session=$1; shift
+  local duration=60 start_url="" ref="" record="" wait=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --duration) duration=$2; shift 2 ;;
+      --start-url) start_url=$2; shift 2 ;;
+      --ref) ref=$2; shift 2 ;;
+      --no-record) record="false"; shift ;;
+      --wait) wait=1; shift ;;
+      *) echo "不明なオプション: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  if [ -n "$(session_ip "$session")" ]; then
+    echo "セッション ${session} はすでに tailnet に存在する（冪等: 何もしない）"
+    return 0
+  fi
+  if [ -n "$(session_run_ids "$session")" ]; then
+    echo "セッション ${session} の run はすでに起動中（準備中の可能性。webtunnel status ${session} で確認）"
+    return 0
+  fi
+
+  # workflow 側で未定義の input を送ると dispatch 自体が拒否されるため、
+  # 空の任意 input は送らない（start_url 等を宣言しない薄い caller workflow に対応）
+  local -a inputs=(-f session="$session" -f duration_minutes="$duration")
+  if [ -n "$start_url" ]; then inputs+=(-f start_url="$start_url"); fi
+  if [ -n "$record" ]; then inputs+=(-f record="$record"); fi
+  gh workflow run "$WORKFLOW" -R "$REPO" ${ref:+--ref "$ref"} "${inputs[@]}"
+  echo "dispatched: session=${session} duration=${duration}分${ref:+ ref=${ref}}"
+
+  if [ "$wait" -eq 1 ]; then
+    cmd_wait "$session"
+  else
+    echo "準備完了待ちは: webtunnel status ${session} または webtunnel up ${session} --wait"
+  fi
+}
+
+# CDP が応答するまで待つ（最大 10 分。Linux runner はセットアップが軽く数分で ready になる）
+cmd_wait() {
+  local session=$1
+  echo "webtunnel-${session} の準備完了を待機中..."
+  for _ in $(seq 1 60); do
+    local ip
+    ip=$(session_ip "$session")
+    if [ -n "$ip" ] && curl -s -m 5 "http://${ip}:${CDP_PORT}/json/version" >/dev/null 2>&1; then
+      echo "ready: http://${ip}:${CDP_PORT} (webtunnel-${session})"
+      return 0
+    fi
+    sleep 10
+  done
+  echo "10 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
+  return 1
+}
+
+cmd_down() {
+  local session=$1
+  local ids
+  ids=$(session_run_ids "$session")
+  if [ -z "$ids" ]; then
+    echo "セッション ${session} の実行中 run はない（冪等: 何もしない）"
+    return 0
+  fi
+  local id
+  for id in $ids; do
+    gh run cancel "$id" -R "$REPO"
+    echo "cancelled: run ${id}"
+  done
+}
+
+cmd_list() {
+  echo "== tailnet 上のセッション =="
+  "$(ts_bin)" status 2>/dev/null | awk '$2 ~ /^webtunnel-/ {print $2 "  " $1}' | sort
+  echo ""
+  echo "== workflow run（直近 10 件）=="
+  gh run list -R "$REPO" --workflow "$WORKFLOW" -L 10
+}
+
+cmd_status() {
+  local session=$1
+  local ip
+  ip=$(session_ip "$session")
+  if [ -z "$ip" ]; then
+    echo "webtunnel-${session} は tailnet に存在しない（未起動 or 準備中）" >&2
+    return 1
+  fi
+  curl -s -m 10 -w "\nHTTP %{http_code} / %{time_total}s\n" "http://${ip}:${CDP_PORT}/json/version"
+}
+
+cmd_cdp() {
+  local session=$1
+  local ip
+  ip=$(session_ip "$session")
+  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  echo "CDP: http://${ip}:${CDP_PORT}"
+  echo ""
+  echo "agent-browser の接続例（--session は作業スペース名にする。~/.claude/rules/agent-browser-session-naming.md 参照）:"
+  echo "  agent-browser --session \"\$(basename \"\$(git rev-parse --show-toplevel 2>/dev/null || pwd)\")\" --cdp http://${ip}:${CDP_PORT} open https://example.com"
+}
+
+# agent-browser を CDP 接続してスクリーンショットを保存する
+cmd_screenshot() {
+  local session=$1; shift
+  local out="${1:-./tmp/webtunnel-${session}-$(date +%H%M%S).png}"
+  command -v agent-browser >/dev/null 2>&1 || { echo "agent-browser が必要" >&2; return 1; }
+  local ip
+  ip=$(session_ip "$session")
+  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+
+  mkdir -p "$(dirname "$out")"
+  # agent-browser のセッション名は作業スペース名 + tunnel セッション名で固有にする
+  # （~/.claude/rules/agent-browser-session-naming.md）
+  export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-$(basename "$(git rev-parse --show-toplevel 2>/dev/null || pwd)")-wt-${session}}"
+  agent-browser --cdp "http://${ip}:${CDP_PORT}" screenshot "$out"
+}
+
+main() {
+  local cmd=${1:-}
+  case "$cmd" in
+    up|down|status|screenshot|wait|cdp)
+      [ $# -ge 2 ] || { echo "session 名を指定して: webtunnel ${cmd} <session>" >&2; exit 1; }
+      shift
+      "cmd_${cmd}" "$@"
+      ;;
+    list)
+      cmd_list
+      ;;
+    *)
+      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
