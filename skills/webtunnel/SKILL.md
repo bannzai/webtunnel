@@ -28,7 +28,7 @@ allowed-tools:
 
 GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でローカルの agent-browser から CDP（Chrome DevTools Protocol）で操作する。ローカルブラウザで完結する検証は `agent-browser` skill が担当し、本 skill は**リモート実行が要る場合**を担当する。
 
-設計・セットアップ手順・実測値の SSOT は、本 skill と同じリポジトリの `PROJECT.md`（`~/ghq/github.com/bannzai/webtunnel/PROJECT.md`）。
+設計・セットアップ手順・実測値の SSOT は、本 skill と同じリポジトリの `PROJECT.md`。場所は `bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh --path` が出力する `<リポジトリルート>/local/webtunnel` から辿り、その `<リポジトリルート>/PROJECT.md` を Read する。
 
 ## 重要な原則
 
@@ -36,6 +36,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 - **画面の状態は実スクリーンショットを Read して判断する。** workflow のログや `status` の HTTP 200 だけで「表示できている」と判断しない。
 - **runner から到達できる URL しか開けない。** ローカルマシンで動いている dev サーバは runner の Chromium からは見えない。
 - セッションは使う時だけ up し、終わったら down する（放置しても `duration_minutes`（既定 60 分）で自動終了する）。
+- **Codex CLI から実行する場合は `${CLAUDE_SKILL_DIR}` を `~/.agents/skills/webtunnel` に読み替える。** この記法を skill ディレクトリへ置換するのは Claude Code だけで、Codex CLI では空に展開されてコマンドが失敗する。
 
 ## ファイル構成
 
@@ -102,11 +103,11 @@ agent-browser --cdp http://<tailscale IP>:9222 screenshot ./tmp/after.png
 ### Phase 4: 終了して録画を取得する
 
 ```bash
-bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh down <session>
-bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.sh <session> ./tmp
+WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh down <session>
+WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.sh <session> ./tmp
 ```
 
-`down` は run をキャンセルする（ephemeral node は tailnet から自動削除される）。録画は `if: always()` の step が artifact `recording-<session>` へアップロードするため、down の後に `fetch-recording.sh` で取得できる。PR に画像・動画を貼る場合は `gh-r2-image` skill を使う。
+`WEBTUNNEL_REPO` は Phase 2 の起動時と同じ値を指定する（省略すると webtunnel リポジトリ自身を探しに行き、対象の run を見つけられない）。`down` は run をキャンセルする（ephemeral node は tailnet から自動削除される）。録画は `if: always()` の step が artifact `recording-<session>` へアップロードするため、down の後に `fetch-recording.sh` で取得できる。PR に画像・動画を貼る場合は `gh-r2-image` skill を使う。
 
 ## 制約・ハマりどころ
 

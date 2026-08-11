@@ -74,18 +74,20 @@ else
           "public リポジトリで実行するか、課金を許容できるか判断する" ;;
   esac
 
-  if gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" >/dev/null 2>&1; then
-    ok "caller-workflow" ".github/workflows/${WORKFLOW}"
+  # ファイルの存在だけでは workflow_dispatch で起動できるか判定できないため、内容まで確認する
+  if workflow_yaml=$(gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null); then
+    case "$workflow_yaml" in
+      *workflow_dispatch*) ok "caller-workflow" ".github/workflows/${WORKFLOW}" ;;
+      *) ng "caller-workflow" ".github/workflows/${WORKFLOW} に workflow_dispatch トリガーが無い" \
+            "caller workflow に workflow_dispatch を宣言する（PROJECT.md の caller 例を参照）" ;;
+    esac
   else
     ng "caller-workflow" ".github/workflows/${WORKFLOW} が無い" \
        "PROJECT.md「各アプリ repo での実行（reusable workflow）」の caller workflow を追加する"
   fi
 
-  # secret の一覧は admin 権限が要るため、取得できない場合は判定材料から外す
-  secrets=$(gh secret list -R "$REPO" --json name --jq '.[].name' 2>/dev/null || true)
-  if [ -z "$secrets" ]; then
-    warn "secrets" "TS_OIDC_CLIENT_ID / TS_OIDC_AUDIENCE の登録を確認できない（admin 権限が必要）"
-  else
+  # secret の一覧は admin 権限が要る。取得に失敗した場合だけ判定材料から外す（成功なら空でも未登録として扱う）
+  if secrets=$(gh secret list -R "$REPO" --json name --jq '.[].name' 2>/dev/null); then
     missing=""
     for name in TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE; do
       echo "$secrets" | grep -qx "$name" || missing="${missing} ${name}"
@@ -95,6 +97,8 @@ else
     else
       ok "secrets" "TS_OIDC_CLIENT_ID / TS_OIDC_AUDIENCE"
     fi
+  else
+    warn "secrets" "TS_OIDC_CLIENT_ID / TS_OIDC_AUDIENCE の登録を確認できない（admin 権限が必要）"
   fi
 fi
 

@@ -35,7 +35,13 @@ cat > "${STUB_BIN}/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   repo) echo "${GH_STUB_VISIBILITY:-PUBLIC}" ;;
-  api) [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] ;;
+  api)
+    # gh api --jq '.content' と同じく base64 で返す（既定は workflow_dispatch を宣言した caller workflow）
+    [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] || exit 1
+    printf '%s\n' "${GH_STUB_WORKFLOW_YAML:-on:
+  workflow_dispatch:
+}" | base64
+    ;;
   secret)
     [ "${GH_STUB_SECRETS_READABLE:-1}" = "1" ] || exit 1
     printf '%s\n' ${GH_STUB_SECRETS:-}
@@ -81,6 +87,12 @@ code=$?
 assert "caller workflow 未整備は exit 1" "1" "$code"
 assert_contains "caller workflow 未整備を NG にする" "NG   caller-workflow" "$out"
 
+out=$(run_preflight GH_STUB_WORKFLOW_YAML="on: push" GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "caller workflow に workflow_dispatch が無い場合は exit 1" "1" "$code"
+assert_contains "workflow_dispatch が無い caller workflow を NG にする" "NG   caller-workflow" "$out"
+assert_contains "workflow_dispatch が無い理由を出力する" "workflow_dispatch" "$out"
+
 out=$(run_preflight TS_STUB_OK=0 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?
 assert "tailnet 未接続は exit 1" "1" "$code"
@@ -90,6 +102,12 @@ out=$(run_preflight GH_STUB_SECRETS="TS_OIDC_CLIENT_ID")
 code=$?
 assert "Secrets が欠けている場合は exit 1" "1" "$code"
 assert_contains "欠けている secret 名を出力する" "TS_OIDC_AUDIENCE" "$out"
+
+out=$(run_preflight)
+code=$?
+assert "secret 一覧が空で取得できた場合は exit 1" "1" "$code"
+assert_contains "secret が 1 件も無い場合を NG にする" "NG   secrets" "$out"
+assert_contains "両方の secret 名を未登録として出力する" "TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE" "$out"
 
 out=$(run_preflight GH_STUB_SECRETS_READABLE=0)
 code=$?
