@@ -40,7 +40,7 @@ find_cli() {
     "$(resolve_script_dir)/../../../local/webtunnel" \
     "${HOME}/ghq/github.com/bannzai/webtunnel/local/webtunnel"; do
     if [ -x "$candidate" ]; then
-      (cd "$(dirname "$candidate")" && pwd -P) | { read -r dir; echo "${dir}/$(basename "$candidate")"; }
+      echo "$(cd "$(dirname "$candidate")" && pwd -P)/$(basename "$candidate")"
       return 0
     fi
   done

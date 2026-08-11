@@ -45,6 +45,11 @@ case "$2" in
       [ "$1" = "-D" ] && out_dir=$2
       shift
     done
+    # 実物の gh run download は展開先に同名ファイルがあると失敗する。スタブも同じ挙動にする
+    if [ -e "${out_dir}/recording.mp4" ]; then
+      echo "error downloading: error extracting zip archive: file exists" >&2
+      exit 1
+    fi
     mkdir -p "$out_dir"
     : > "${out_dir}/recording.mp4"
     ;;
@@ -84,7 +89,12 @@ assert "完了済み run があれば exit 0" "0" "$code"
 assert_contains "取得した run ID を報告する" "run 111" "$out"
 assert_contains "mp4 のパスを出力する" "recording.mp4" "$out"
 assert_contains "artifact 名は recording-<session>" "-n recording-dev" "$(cat "$DOWNLOAD_LOG")"
-assert_contains "指定した出力ディレクトリへ展開する" "-D ${TMP}/out" "$(cat "$DOWNLOAD_LOG")"
+assert "指定した出力ディレクトリへ展開する" \
+  "found" "$([ -f "${TMP}/out/recording.mp4" ] && echo found || echo missing)"
+
+out=$(run_fetch "${TMP}/runs-completed.json" dev "${TMP}/out")
+code=$?
+assert "既存ファイルがある出力先への再実行も exit 0（冪等）" "0" "$code"
 
 # セッション名は "session=<name> " の前方一致。dev を指定して dev2 の run を拾わないこと
 out=$(run_fetch "${TMP}/runs-other-session.json" dev "${TMP}/out2")

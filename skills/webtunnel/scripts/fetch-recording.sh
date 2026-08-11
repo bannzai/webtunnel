@@ -7,7 +7,8 @@
 #        WEBTUNNEL_WORKFLOW  caller workflow のファイル名（既定 browser-session.yml）
 # Exit:  0=取得成功 / 1=取得できない / 2=引数不正
 #
-# 同じ引数で再実行すると同じ artifact を同じ場所へ展開し直す（gh run download が上書きする）ため冪等。
+# gh run download は既存ファイルがあると失敗するため、一時ディレクトリへダウンロードしてから
+# 出力先へ上書きコピーする。同じ引数での再実行は同じ結果になる（冪等）。
 set -euo pipefail
 
 REPO="${WEBTUNNEL_REPO:-bannzai/webtunnel}"
@@ -40,7 +41,10 @@ if [ "$status" != "completed" ]; then
   exit 1
 fi
 
+tmp_dir=$(mktemp -d)
+trap 'rm -rf "$tmp_dir"' EXIT
+gh run download "$run_id" -R "$REPO" -n "recording-${SESSION}" -D "$tmp_dir"
 mkdir -p "$OUT_DIR"
-gh run download "$run_id" -R "$REPO" -n "recording-${SESSION}" -D "$OUT_DIR"
+cp -Rf "${tmp_dir}/." "$OUT_DIR/"
 echo "downloaded: run ${run_id} → ${OUT_DIR}"
 find "$OUT_DIR" -type f -name '*.mp4'
