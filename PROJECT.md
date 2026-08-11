@@ -227,7 +227,7 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 
 ### preview（ライブ映像）（完了: 2026-08-11）
 
-- `runner/preview-server.py` / `start-preview.sh` / `session.yml` の `preview` input（既定 true）/ `local/webtunnel preview <session>`
+- `runner/preview-server.py` / `start-preview.sh` / `session.yml` の `preview` input（既定 true。`up --no-preview` で preview サーバを起動せず :9100 も bridge しない）/ `local/webtunnel preview <session>`
 - ブラウザで開いた preview ページにセッションの画面が表示され、CDP 操作がライブで反映されること
 
 #### preview 実測（2026-08-11 / ubuntu-latest / 1280x800 の Xvfb を x11grab / 表示は日本語 Wikipedia）
@@ -244,7 +244,7 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 
 遅延（CDP でタブを開く / 閉じる操作をしてから、その変化が映ったフレームがローカルに届くまで）は 6 回測って**中央値 1.47 秒**（最小 1.44 / 最大 1.55）。既定の 2fps ではフレーム間隔 0.5 秒がこの値に含まれる。
 
-- **このセッションの tailnet は direct 接続だった**（`tailscale status` が `direct`。DERP relay 経由ではない）。382 KB/s まで出たのはそのため。NAT の条件次第で simtunnel の実測（DERP relay 経由で約 60KB/s）まで落ちうるため、**既定は relay でも成立する 2fps / 640 幅 / quality 8（54 KB/s）**にした。回線が太い時は preview ページのフォームで上げられる
+- **このセッションの tailnet は direct 接続だった**（`tailscale status` が `direct`。DERP relay 経由ではない）。382 KB/s まで出たのはそのため。NAT の条件次第で simtunnel の実測（DERP relay 経由で約 60KB/s）まで落ちうるため、**既定はその帯域でも成立する想定で 2fps / 640 幅 / quality 8（54 KB/s）にした**（relay 経由の実測は未取得。「未検証事項・リスク」参照）。回線が太い時は preview ページのフォームで上げられる
 - 実測 fps が指定より 7〜18% 低いのは x11grab と JPEG エンコードのオーバーヘッド。指定 5fps / 1280 幅で最も落ち込む（4.10 fps）
 - MJPEG はフレーム間圧縮が無いため、帯域はほぼ「1 フレームのサイズ × fps」になる。解像度を半分にする方が quality を下げるより効く（1280 幅 93KB に対し 640 幅 29KB）
 

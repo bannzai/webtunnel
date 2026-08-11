@@ -154,7 +154,7 @@ cmd_preview() {
   ip=$(session_ip "$session")
   [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
   local url="http://${ip}:${PREVIEW_PORT}/"
-  curl -s -m 10 -o /dev/null "$url" || {
+  curl -fsS -m 10 -o /dev/null "$url" || {
     echo "preview が応答しない（up --no-preview で起動していないか確認する）: ${url}" >&2
     return 1
   }
