@@ -128,7 +128,9 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 while True:
-                    chunk = process.stdout.read(8192)
+                    # read() は 8KB 貯まるまでブロックしフレームを跨いで溜め込むため、
+                    # 今読めるぶんだけ返す read1() で即転送する（ライブ性を優先）
+                    chunk = process.stdout.read1(8192)
                     if not chunk:
                         break
                     self.wfile.write(chunk)

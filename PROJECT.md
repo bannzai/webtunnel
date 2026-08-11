@@ -97,7 +97,7 @@ GitHub の Additional Product Terms は、GitHub-hosted runner の用途を「wo
 - アプリ repo 側に Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）の登録が必要。OIDC token の subject は caller repo 基準になるため、**caller repo の作成時期に応じて subject 形式が変わる**（「セットアップ手順」の immutable ID 形式を参照）。simtunnel の credential を流用できるとは限らない
 - caller repo 上で dev サーバをビルド・起動してから session.yml を呼ぶ形（simtunnel の `build_project` に相当する input）は Phase 2 で設計する（「実装フェーズ」参照）
 
-caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）:
+caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）。`local/webtunnel` は `--start-url` / `--no-record` / `--no-preview` を対応する input の `-f` として送り、**caller 側で未宣言の input を送ると dispatch 自体が拒否される**ため、CLI の全オプションを使えるよう任意 input もパススルーで宣言しておく:
 
 ```yaml
 name: browser-session
@@ -111,6 +111,15 @@ on:
       duration_minutes:
         required: true
         default: "60"
+      start_url:
+        required: false
+        default: "about:blank"
+      record:
+        required: false
+        default: "true"
+      preview:
+        required: false
+        default: "true"
 jobs:
   session:
     permissions:
@@ -120,6 +129,9 @@ jobs:
     with:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
+      start_url: ${{ inputs.start_url }}
+      record: ${{ inputs.record }}
+      preview: ${{ inputs.preview }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
