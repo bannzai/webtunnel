@@ -77,16 +77,20 @@ load_auth_env() {
       warn "secret \`WEBTUNNEL_AUTH_ENV\` に \`KEY=VALUE\` 形式でない行がある。その行を無視する。"
       continue
     fi
-    # 値を引用符で囲んで書かれていても実値だけを渡す（引用符ごと伏字にすると実値がログに残る）
-    if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
-      value="${BASH_REMATCH[1]}"
-    fi
+    # 最初の `=` 以降は引用符も含めて生の値として扱う（引用符・エスケープの構文は提供しない。
+    # 「気を利かせて」剥がすと、引用符で始まり引用符で終わる正規のパスワードを壊す）
     # 空値の add-mask は runner が警告を出すだけなので登録しない（export はする）
     if [ -n "$value" ]; then
       echo "::add-mask::$(escape_workflow_command_data "$value")"
     fi
-    export "$key=$value"
-    names+=("$key")
+    # UID 等シェルの readonly 変数名への代入は if 条件の中でもシェルごと中断させる致命エラーになる。
+    # サブシェルで代入可否を先に確かめ、不可なら警告して続行する（step ごと死なせない）
+    if ( export "$key=$value" ) 2>/dev/null; then
+      export "$key=$value"
+      names+=("$key")
+    else
+      warn "secret \`WEBTUNNEL_AUTH_ENV\` の \`${key}\` は export できない変数名（シェルの readonly 等）のため無視する。"
+    fi
   done < <(printf '%s\n' "$decoded")
 
   if [ ${#names[@]} -gt 0 ]; then
@@ -103,13 +107,11 @@ if [ ! -f "$SETUP_SCRIPT" ]; then
   exit 0
 fi
 
-if [ -n "${WEBTUNNEL_AUTH_ENV:-}" ]; then
-  load_auth_env
-fi
-
 # セットアップスクリプトから CDP でブラウザを操作するための共通ツール。
 # 自前の CDP クライアントは作らず、ローカルと同じ agent-browser を使う
 # （参照: PROJECT.md「操作レイヤー: agent-browser の CDP 接続」）。
+# 認証情報の export より前に行う。npm の lifecycle スクリプト（依存ツリー含む）は
+# サードパーティのコードであり、caller のセットアップスクリプト専用の資格情報を見せない
 if ! command -v agent-browser >/dev/null 2>&1; then
   # --cdp は起動済みの Chromium に接続するため、Playwright のブラウザバイナリは要らない
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -118,6 +120,10 @@ if ! command -v agent-browser >/dev/null 2>&1; then
   else
     warn "agent-browser のインストールに失敗した（${INSTALL_TIMEOUT_SECONDS} 秒でタイムアウトした可能性あり）。\`${SETUP_SCRIPT}\` を agent-browser 無しで実行する。"
   fi
+fi
+
+if [ -n "${WEBTUNNEL_AUTH_ENV:-}" ]; then
+  load_auth_env
 fi
 
 export WEBTUNNEL_CDP_URL="http://127.0.0.1:${CDP_PORT}"
