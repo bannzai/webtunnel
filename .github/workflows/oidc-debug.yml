@@ -1,0 +1,36 @@
+# Tailscale の OIDC 認証 403 を切り分けるための一時 workflow。切り分け完了後に削除する。
+# GitHub が発行する OIDC トークンの sub クレームと、Secrets の形（値そのものは出さない）を確認する。
+name: oidc-debug
+
+on:
+  push:
+    branches: [implement-webtunnel]
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: OIDC トークンの sub と Secrets の形を確認
+        env:
+          CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+          AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+        run: |
+          # 値そのものは出さない。長さ・前後の空白有無・構造だけを出す
+          echo "CLIENT_ID: 長さ=${#CLIENT_ID}"
+          echo "AUDIENCE:  長さ=${#AUDIENCE}"
+          case "$CLIENT_ID" in *[[:space:]]*) echo "CLIENT_ID に空白/改行が混入している" ;; *) echo "CLIENT_ID に空白なし" ;; esac
+          case "$AUDIENCE" in *[[:space:]]*) echo "AUDIENCE に空白/改行が混入している" ;; *) echo "AUDIENCE に空白なし" ;; esac
+          case "$AUDIENCE" in api.tailscale.com/*) echo "AUDIENCE は api.tailscale.com/ で始まる（想定どおり）" ;; *) echo "AUDIENCE が api.tailscale.com/ で始まらない（値の取り違えの可能性）" ;; esac
+          case "$AUDIENCE" in *"$CLIENT_ID") echo "AUDIENCE の末尾が CLIENT_ID と一致（想定どおり）" ;; *) echo "AUDIENCE の末尾が CLIENT_ID と一致しない" ;; esac
+
+          # OIDC トークンを取得して sub / aud / job_workflow_ref を確認する（トークン本体は出さない）
+          TOKEN=$(curl -sS -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUDIENCE}" | jq -r '.value')
+          PAYLOAD=$(printf '%s' "$TOKEN" | cut -d. -f2 | tr '_-' '/+')
+          # base64 のパディングを補ってからデコードする
+          case $(( ${#PAYLOAD} % 4 )) in 2) PAYLOAD="${PAYLOAD}==" ;; 3) PAYLOAD="${PAYLOAD}=" ;; esac
+          printf '%s' "$PAYLOAD" | base64 -d 2>/dev/null \
+            | jq '{sub, aud, repository, job_workflow_ref, event_name, ref}'
