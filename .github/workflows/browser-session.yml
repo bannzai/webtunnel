@@ -26,6 +26,10 @@ on:
         description: "セッション画面を録画して artifact に残す"
         required: false
         default: "true"
+      preview:
+        description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
+        required: false
+        default: "true"
 
 jobs:
   session:
@@ -39,6 +43,7 @@ jobs:
       duration_minutes: ${{ inputs.duration_minutes }}
       start_url: ${{ inputs.start_url }}
       record: ${{ inputs.record }}
+      preview: ${{ inputs.preview }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
