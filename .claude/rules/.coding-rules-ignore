@@ -1,0 +1,3 @@
+# webtunnel は bash + GitHub Actions workflow のみで構成され、以下の言語・サービス固有ルールは該当しない
+coding-rules-supabase-sql-function-privileges.md
+coding-rules-swift-memberwise-initializer.md
