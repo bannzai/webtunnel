@@ -120,13 +120,14 @@ jobs:
           persist-credentials: false
 
       # runner スクリプトは caller リポジトリには無いため、この workflow ファイルと同一 repo・同一 commit を取得する
-      # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）
+      # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）。
+      # checkout はパス先の既存内容を消すため、caller リポジトリのディレクトリと衝突しにくい dot 付きのパスに置く
       - name: webtunnel（runner スクリプト）を checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
-          path: webtunnel
+          path: .webtunnel
           persist-credentials: false
 
       # reusable workflow の呼び出しは job 単位で caller が step を差し込めないため、
@@ -147,16 +148,16 @@ jobs:
           WORKING_DIRECTORY: ${{ inputs.working_directory }}
           PORT: ${{ inputs.port }}
           READY_PATH: ${{ inputs.ready_path }}
-        run: ./webtunnel/runner/start-dev-server.sh
+        run: ./.webtunnel/runner/start-dev-server.sh
 
       - name: Chromium を起動
         timeout-minutes: 10
-        run: ./webtunnel/runner/start-chromium.sh
+        run: ./.webtunnel/runner/start-chromium.sh
 
       - name: 録画を開始
         if: inputs.record == 'true'
         timeout-minutes: 5
-        run: ./webtunnel/runner/start-recording.sh
+        run: ./.webtunnel/runner/start-recording.sh
 
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
@@ -170,7 +171,7 @@ jobs:
 
       - name: tailnet へブリッジ
         timeout-minutes: 10
-        run: ./webtunnel/runner/bridge.sh "$CDP_PORT"
+        run: ./.webtunnel/runner/bridge.sh "$CDP_PORT"
 
       - name: セッション情報を出力
         env:
@@ -190,14 +191,14 @@ jobs:
       - name: セッションを維持
         env:
           DURATION: ${{ inputs.duration_minutes }}
-        run: ./webtunnel/runner/keepalive.sh "$DURATION" "$CDP_PORT"
+        run: ./.webtunnel/runner/keepalive.sh "$DURATION" "$CDP_PORT"
 
       # down（gh run cancel）でも録画を artifact に残すため always() にする。
       # cancel 後も always() の step は猶予時間内で実行される
       - name: 録画を停止
         if: always() && inputs.record == 'true'
         timeout-minutes: 5
-        run: ./webtunnel/runner/stop-recording.sh
+        run: ./.webtunnel/runner/stop-recording.sh
 
       - name: 録画を artifact にアップロード
         if: always() && inputs.record == 'true'

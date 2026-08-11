@@ -24,13 +24,32 @@ responding() {
   curl -s -o /dev/null -m 3 "$READY_URL"
 }
 
+# 127.0.0.1 以外で listen していると Tailscale 参加後に dev サーバが tailnet へ露出する
+# （PROJECT.md「dev サーバの起動」）。runner (Linux) には ss が必ずあり、
+# ローカル macOS での単体実行時だけスキップされる
+assert_loopback_only() {
+  command -v ss >/dev/null 2>&1 || return 0
+  local exposed
+  exposed=$(ss -tln "( sport = :${PORT} )" 2>/dev/null | awk 'NR>1 {print $4}' | grep -vE '^(127\.[0-9.]+|\[::1\]):' || true)
+  [ -z "$exposed" ] || {
+    echo "dev サーバが loopback 以外で listen している: ${exposed}" >&2
+    echo "127.0.0.1 で listen させる（例: vite は server.host、next dev は -H 127.0.0.1）" >&2
+    exit 1
+  }
+}
+
 if responding; then
+  assert_loopback_only
   echo "${READY_URL} はすでに応答している（冪等: 何もしない）"
   exit 0
 fi
 
 cd "${ROOT}/${WORKING_DIRECTORY}"
 export PORT
+# id-token: write の job では全 step に OIDC トークン発行用の env が注入される。
+# caller のコマンド（依存パッケージの install script を含む）に Tailscale の
+# trust credential を使える token の発行能力を渡さない
+unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
 
 if [ -n "$SETUP_COMMAND" ]; then
   echo "setup: ${SETUP_COMMAND}"
@@ -47,6 +66,7 @@ DEV_PID=$!
 
 for _ in $(seq 1 90); do
   if responding; then
+    assert_loopback_only
     echo "ready: ${READY_URL}"
     exit 0
   fi

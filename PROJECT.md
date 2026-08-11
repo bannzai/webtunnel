@@ -82,6 +82,9 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **ビルド成果物を artifact 経由で受け取る経路（simtunnel の `app_artifact` 相当）は作らない**。simtunnel でこれが要るのは、macOS runner が高価でビルドを別 job に切り出す動機があり、かつ Flutter 等が `xcodebuild` 直叩きで表現できないため。Web は `setup_command` に任意のシェルコマンドを書けて Linux runner も安価なため、同一 job でビルドすれば足りる。必要になったら caller 側の build job + `download-artifact` を足す
 - `start_url` を省略した時は `http://localhost:<port>/` を開く。dev サーバを起動しない場合だけ `about:blank` になる
 - dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える
+- **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
+- **caller のコマンドに OIDC トークンの発行能力を渡さない**。`id-token: write` の job では全 step に `ACTIONS_ID_TOKEN_REQUEST_*` が注入され、`setup_command` が走らせる依存パッケージの install script（サプライチェーン）が Tailscale の trust credential に使える token を発行できてしまう。start-dev-server.sh が実行前に unset する
+- **runner スクリプトの checkout は `.webtunnel`（dot 付き）に置く**。checkout はパス先の既存内容を消すため、caller リポジトリのルートに同名ディレクトリがあると壊してしまう。dot 付きにして衝突しにくくする
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
