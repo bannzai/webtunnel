@@ -2,11 +2,12 @@
 # WebTunnel ローカル CLI。GHA 上の Chromium (CDP) セッションを管理する。
 #
 # 使い方:
-#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--wait]
+#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--no-preview] [--wait]
 #   webtunnel down <session>
 #   webtunnel list
 #   webtunnel status <session>
 #   webtunnel cdp <session>                  # CDP の URL と agent-browser の接続例を表示
+#   webtunnel preview <session>              # セッション画面のライブ映像をブラウザで開く
 #   webtunnel screenshot <session> [出力パス]  # agent-browser 経由でスクリーンショットを保存
 #
 # CDP は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、
@@ -19,6 +20,7 @@ set -euo pipefail
 REPO="${WEBTUNNEL_REPO:-bannzai/webtunnel}"
 WORKFLOW="${WEBTUNNEL_WORKFLOW:-browser-session.yml}"
 CDP_PORT=9222
+PREVIEW_PORT=9100
 
 ts_bin() {
   if command -v tailscale >/dev/null 2>&1; then
@@ -44,13 +46,14 @@ session_run_ids() {
 
 cmd_up() {
   local session=$1; shift
-  local duration=60 start_url="" ref="" record="" wait=0
+  local duration=60 start_url="" ref="" record="" preview="" wait=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --duration) duration=$2; shift 2 ;;
       --start-url) start_url=$2; shift 2 ;;
       --ref) ref=$2; shift 2 ;;
       --no-record) record="false"; shift ;;
+      --no-preview) preview="false"; shift ;;
       --wait) wait=1; shift ;;
       *) echo "不明なオプション: $1" >&2; exit 1 ;;
     esac
@@ -70,6 +73,7 @@ cmd_up() {
   local -a inputs=(-f session="$session" -f duration_minutes="$duration")
   if [ -n "$start_url" ]; then inputs+=(-f start_url="$start_url"); fi
   if [ -n "$record" ]; then inputs+=(-f record="$record"); fi
+  if [ -n "$preview" ]; then inputs+=(-f preview="$preview"); fi
   gh workflow run "$WORKFLOW" -R "$REPO" ${ref:+--ref "$ref"} "${inputs[@]}"
   echo "dispatched: session=${session} duration=${duration}分${ref:+ ref=${ref}}"
 
@@ -142,6 +146,22 @@ cmd_cdp() {
   echo "  agent-browser --session \"\$(basename \"\$(git rev-parse --show-toplevel 2>/dev/null || pwd)\")\" --cdp http://${ip}:${CDP_PORT} open https://example.com"
 }
 
+# セッション画面のライブ映像（MJPEG）をブラウザで開く。
+# preview ページは stream を相対 URL で参照するため、CDP と同じく IP で開いてよい。
+cmd_preview() {
+  local session=$1
+  local ip
+  ip=$(session_ip "$session")
+  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  local url="http://${ip}:${PREVIEW_PORT}/"
+  curl -fsS -m 10 -o /dev/null "$url" || {
+    echo "preview が応答しない（up --no-preview で起動していないか確認する）: ${url}" >&2
+    return 1
+  }
+  echo "open: ${url}"
+  open "$url"
+}
+
 # agent-browser を CDP 接続してスクリーンショットを保存する
 cmd_screenshot() {
   local session=$1; shift
@@ -161,7 +181,7 @@ cmd_screenshot() {
 main() {
   local cmd=${1:-}
   case "$cmd" in
-    up|down|status|screenshot|wait|cdp)
+    up|down|status|screenshot|wait|cdp|preview)
       [ $# -ge 2 ] || { echo "session 名を指定して: webtunnel ${cmd} <session>" >&2; exit 1; }
       shift
       "cmd_${cmd}" "$@"
@@ -170,7 +190,7 @@ main() {
       cmd_list
       ;;
     *)
-      sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
       exit 1
       ;;
   esac
