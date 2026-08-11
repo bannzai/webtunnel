@@ -35,6 +35,12 @@ curl -fsS -m 2 -o /dev/null "${BASE_URL}/login" || {
   exit 1
 }
 
+# add-mask が効いていること（誤って出力しても Actions ログでは *** になること）を
+# 実際の run で確認するためのデモ専用の出力。実アプリの setup.sh には書かない
+if [ "${WEBTUNNEL_DEMO_MASK_CHECK:-}" = "1" ]; then
+  echo "マスク確認 (Actions ログでは伏字になる): ${WEBTUNNEL_DEMO_PASSWORD}"
+fi
+
 # パスワードは引数として渡すため runner のプロセス一覧には現れる。使い捨ての単一テナント VM で、
 # かつ Actions ログでは add-mask により伏字になるため許容する（PROJECT.md「認証情報の受け渡し」参照）
 ab() { agent-browser --cdp "$WEBTUNNEL_CDP_URL" "$@"; }
