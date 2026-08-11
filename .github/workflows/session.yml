@@ -107,8 +107,10 @@ jobs:
           WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
         run: ./webtunnel/runner/run-auth-setup.sh
 
+      # WEBTUNNEL_SKIP_RECORDING はセットアップ失敗時に画面を初期化できなかった場合に
+      # run-auth-setup.sh が立てる（認証情報が画面に残ったまま録画するのを防ぐ）
       - name: 録画を開始
-        if: inputs.record == 'true'
+        if: inputs.record == 'true' && env.WEBTUNNEL_SKIP_RECORDING != 'true'
         timeout-minutes: 5
         run: ./webtunnel/runner/start-recording.sh
 

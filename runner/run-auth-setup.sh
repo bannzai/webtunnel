@@ -28,11 +28,12 @@ warn() {
   } >> "$SUMMARY"
 }
 
-# timeout は Linux runner の coreutils に含まれるが、無い環境で全コマンドを失敗させないよう素通しする
+# timeout は Linux runner の coreutils に含まれるが、無い環境で全コマンドを失敗させないよう素通しする。
+# TERM を無視するプロセスでも打ち切れるよう --kill-after で KILL を予約する（TERM 打ち切りは 124、KILL は 137）
 run_with_timeout() {
   local seconds=$1; shift
   if command -v timeout >/dev/null 2>&1; then
-    timeout "$seconds" "$@"
+    timeout --kill-after 10 "$seconds" "$@"
   else
     "$@"
   fi
@@ -138,13 +139,32 @@ if [ "$SETUP_STATUS" -eq 0 ]; then
 fi
 
 # 失敗すると入力途中のログインフォーム（ユーザー名が見えている）が画面に残り、
-# 直後に始まる録画へ写り込む。about:blank に戻してから録画を開始させる
-if command -v agent-browser >/dev/null 2>&1; then
-  agent-browser --cdp "$WEBTUNNEL_CDP_URL" open about:blank >/dev/null 2>&1 || true
-fi
-if [ "$SETUP_STATUS" -eq 124 ]; then
-  warn "\`${SETUP_SCRIPT}\` が ${SETUP_TIMEOUT_SECONDS} 秒で終わらなかったため打ち切った。ログイン前の状態でセッションを開く（画面は about:blank に戻した）。"
+# 直後に始まる録画へ写り込む。agent-browser の不調がセットアップ失敗の原因でも動くよう
+# CDP を直接叩いて空タブを開き、それ以外の page タブを全て閉じてから残数で検証する
+blank_browser() {
+  local base="http://127.0.0.1:${CDP_PORT}"
+  # Chrome 111+ の /json/new は PUT 必須
+  curl -s -m 5 -X PUT "${base}/json/new?about:blank" >/dev/null || return 1
+  local ids id
+  ids="$(curl -s -m 5 "${base}/json/list" | jq -r '.[] | select(.type == "page" and .url != "about:blank") | .id')" || return 1
+  for id in $ids; do
+    curl -s -m 5 "${base}/json/close/${id}" >/dev/null || true
+  done
+  local remaining
+  remaining="$(curl -s -m 5 "${base}/json/list" | jq -r '[.[] | select(.type == "page" and .url != "about:blank")] | length')" || return 1
+  [ "$remaining" = "0" ]
+}
+
+if blank_browser; then
+  BLANK_NOTE="画面は about:blank に戻した"
 else
-  warn "\`${SETUP_SCRIPT}\` の実行に失敗した（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く（画面は about:blank に戻した）。ログは step「セッションを初期化」を参照。"
+  # 画面に認証情報が残っていない保証が取れないため、録画 step 自体を止める
+  echo "WEBTUNNEL_SKIP_RECORDING=true" >> "${GITHUB_ENV:-/dev/null}"
+  BLANK_NOTE="画面を初期化できなかったため、認証情報の写り込みを避けて録画を無効化した"
+fi
+if [ "$SETUP_STATUS" -eq 124 ] || [ "$SETUP_STATUS" -eq 137 ]; then
+  warn "\`${SETUP_SCRIPT}\` が ${SETUP_TIMEOUT_SECONDS} 秒で終わらなかったため打ち切った（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く。${BLANK_NOTE}。"
+else
+  warn "\`${SETUP_SCRIPT}\` の実行に失敗した（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く。${BLANK_NOTE}。ログは step「セッションを初期化」を参照。"
 fi
 exit 0
