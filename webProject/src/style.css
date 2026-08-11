@@ -9,11 +9,23 @@ body {
   color: #1b1c1e;
 }
 
-/* runner の Chromium は 1280x800 で起動するため、スクロールせずに全要素が入る高さに収める */
+/* runner の Chromium (1280x800 ウィンドウ = 高さ 650px 前後のビューポート) で
+   スクロールせずに全要素が入るよう、上 2 つのセクションを横に並べる */
 main {
-  max-width: 40rem;
+  max-width: 52rem;
   margin: 0 auto;
   padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(18rem, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.columns > section {
+  margin-top: 0;
 }
 
 h1 {
@@ -56,8 +68,11 @@ input {
   border-radius: 0.35rem;
 }
 
-label {
-  margin-right: 0.5rem;
+form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 output {

@@ -13,21 +13,23 @@
         agent-browser からの操作と、日本語が豆腐（□）にならないことをこの 1 ページで確認する。
       </p>
 
-      <section>
-        <h2>クリックで表示が変わる</h2>
-        <button id="counter-button" type="button">カウントする</button>
-        <p>これまで <output id="counter-value">0</output> 回クリックした</p>
-      </section>
+      <div class="columns">
+        <section>
+          <h2>クリックで表示が変わる</h2>
+          <button id="counter-button" type="button">カウントする</button>
+          <p>これまで <output id="counter-value">0</output> 回クリックした</p>
+        </section>
 
-      <section>
-        <h2>フォーム入力</h2>
-        <form id="greeting-form">
-          <label for="greeting-input">お名前</label>
-          <input id="greeting-input" name="name" type="text" placeholder="山田 太郎" />
-          <button id="greeting-submit" type="submit">あいさつする</button>
-        </form>
-        <p id="greeting-output">名前を入力してあいさつすると、ここに表示される</p>
-      </section>
+        <section>
+          <h2>フォーム入力</h2>
+          <form id="greeting-form">
+            <label for="greeting-input">お名前</label>
+            <input id="greeting-input" name="name" type="text" placeholder="山田 太郎" />
+            <button id="greeting-submit" type="submit">あいさつする</button>
+          </form>
+          <p id="greeting-output">名前を入力してあいさつすると、ここに表示される</p>
+        </section>
+      </div>
 
       <section>
         <h2>非同期に更新される要素</h2>

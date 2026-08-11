@@ -88,7 +88,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 `webProject/` に Vite の最小サンプルアプリを置き、`browser-session.yml` の `sample_app`（既定 `true`）でこれを dev サーバとして起動する。simtunnel の `iOSProject/` + `sample_app` と同じ位置づけで、外部サイトに依存せず webtunnel 単体で「起動 → 操作」まで検証できる。
 
 - 動作確認で意味を持つ要素を 1 ページに置く: クリックで変わるカウンタ、フォーム入力、日本語テキスト（CJK フォント確認）、非同期に更新される要素（`public/items.json` の fetch と経過秒数）
-- 1280x800（runner の Chromium のウィンドウサイズ）でスクロールせずに全要素が入るレイアウトにする。録画・スクリーンショットに全要素が写るため
+- runner の Chromium（1280x800 のウィンドウ = 高さ 650px 前後のビューポート）でスクロールせずに全要素が入るレイアウトにする。録画・スクリーンショットに全要素が写るため
 - 依存は Vite のみ。dev サーバ起動の input（`setup_command` = `npm ci` / `start_command` = `npm run dev` / `node_version`）を実際に通す検証対象を兼ねる
 
 ### リポジトリ公開に耐える安全性
