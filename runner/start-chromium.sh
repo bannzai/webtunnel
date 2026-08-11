@@ -17,6 +17,13 @@ command -v Xvfb >/dev/null 2>&1 || {
   sudo apt-get install -y -qq xvfb
 }
 
+# 日本語ページの動作確認でテキストが豆腐（□）にならないよう CJK フォントを入れる
+if ! fc-list 2>/dev/null | grep -qi "noto sans cjk"; then
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq fonts-noto-cjk fonts-noto-color-emoji
+  fc-cache -f >/dev/null 2>&1 || true
+fi
+
 # ubuntu-latest runner には google-chrome がプリインストールされている
 CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || true)"
 [ -n "$CHROME_BIN" ] || { echo "Chromium 系バイナリが見つからない" >&2; exit 1; }
