@@ -187,11 +187,25 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 
 ## 実装フェーズ
 
-### Phase 1: 疎通（本実装）
+### Phase 1: 疎通（完了: 2026-08-11）
 
 - browser-session.yml / session.yml / runner スクリプト / local CLI
 - ローカルの agent-browser から tailnet 越しに CDP 接続し、ページ操作・スクリーンショットが動くこと
 - 録画 artifact が down 後に取得できること
+
+#### Phase 1 実測（2026-08-11 / ubuntu-latest / Google Chrome 150.0.7871.128）
+
+| 項目 | 実測 |
+|---|---|
+| `webtunnel status`（`GET /json/version`） | HTTP 200 / 0.31 秒 |
+| `agent-browser --cdp open <url>`（ページ遷移） | 3.3 秒 |
+| `agent-browser --cdp screenshot`（1280x800 PNG） | 2.2 秒 |
+| セッション ready まで（dispatch からの総時間） | 3 分前後 |
+| 録画（1280x800 / 5fps / h264） | 103 秒で 212KB |
+
+- DERP 経由でも CDP の操作レイテンシは実用範囲だった。simtunnel（WDA の `GET /screenshot` が 1 分超）と違い、スクリーンショットの取得経路を別途用意する必要はない
+- runner の Chromium には CJK フォントが無く、日本語が豆腐（□）になる。`start-chromium.sh` で `fonts-noto-cjk` を導入して解消した
+- `webtunnel down`（`gh run cancel`）後も `if: always()` の step が実行され、録画 artifact を取得できることを確認した
 
 ### Phase 2: 各アプリ repo への展開
 
@@ -200,6 +214,6 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 
 ## 未検証事項・リスク
 
-- DERP relay 経由の CDP スループット。simtunnel の実測では DERP は約 60KB/s で、CDP の JSON メッセージは小さいため操作は問題ない想定だが、`screenshot`（base64 PNG）は数秒〜十数秒かかる可能性がある。遅すぎる場合は agent-browser 側で viewport を小さくするか、Phase 2 で MJPEG 相当の軽量ストリームを検討する
 - concurrency group は caller リポジトリ単位のため、repo を跨いだ同名セッション（tailnet ホスト名の衝突）は防げない。セッション名にリポジトリ由来の接頭辞を使う運用で回避する
+- `cancel-in-progress: false` のため、同名セッションを down せずに再起動すると新しい run は前の run の終了までキューで待つ。作り直す時は先に `webtunnel down` する
 - ubuntu-latest のイメージ更新で Chromium のバイナリ名やプリインストール状況が変わる可能性がある。start-chromium.sh は google-chrome → google-chrome-stable → chromium-browser の順でフォールバックする
