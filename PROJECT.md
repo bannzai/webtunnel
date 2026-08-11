@@ -95,6 +95,14 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - runner の Chromium（1280x800 のウィンドウ = 高さ 650px 前後のビューポート）でスクロールせずに全要素が入るレイアウトにする。録画・スクリーンショットに全要素が写るため
 - 依存は Vite のみ。dev サーバ起動の input（`setup_command` = `npm ci` / `start_command` = `npm run dev` / `node_version`）を実際に通す検証対象を兼ねる
 
+### 利用者向け skill はこのリポジトリに置き、symlink で設置する
+
+simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポジトリ（bannzai/castle）に実体を置いているが、webtunnel の skill は**本リポジトリの `skills/` に実体を置く**。CLI（`local/webtunnel`）・workflow・runner スクリプトと同じ変更で skill を更新でき、実装と入口がずれないため。
+
+- グローバルへの設置は `skills/install.sh` による symlink（`~/.claude/skills` / `~/.agents/skills` / `~/.codex/skills` のうち存在するもの）。dotfile リポジトリ側にはリンクだけが残る
+- skill から CLI を呼ぶ経路は `skills/webtunnel/scripts/webtunnel-cli.sh` に集約する。自身の実体パスからリポジトリルートを辿るため、clone 先や symlink 経由の設置に依存しない
+- ローカルブラウザとリモート（webtunnel）の使い分けは `agent-browser` skill から webtunnel skill へ誘導する（判断基準の SSOT は webtunnel skill の Phase 1）
+
 ### リポジトリ公開に耐える安全性
 
 リポジトリは public で運用する（Linux runner 無料）。tailnet 内の実 IP 等の環境固有情報はこのリポジトリに書かない。simtunnel の PROJECT.md「リポジトリ公開に耐える安全性」と同一の原則を適用する:
@@ -134,6 +142,12 @@ on:
       duration_minutes:
         required: true
         default: "60"
+      start_url:
+        required: false
+        default: "" # 空なら dev サーバの URL を開く（session.yml 側の既定に合わせる）
+      record:
+        required: false
+        default: "true"
 jobs:
   session:
     permissions:
@@ -143,6 +157,8 @@ jobs:
     with:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
+      start_url: ${{ inputs.start_url }}
+      record: ${{ inputs.record }}
       # 以下はアプリに合わせて固定値で書く（起動するのは常にこのプロジェクトのため）
       setup_command: npm ci
       start_command: npm run dev
@@ -176,8 +192,11 @@ webtunnel/
 │   ├── bridge.sh                     # socat: tailscale IF → CDP ポート（直接到達可能ならスキップ）
 │   └── keepalive.sh                  # duration_minutes までジョブを維持（CDP 死活監視付き）
 ├── webProject/                       # 自己検証用のサンプル Web アプリ（Vite）
-└── local/
-    └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / screenshot / wait
+├── local/
+│   └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / screenshot / wait
+└── skills/                           # AI エージェント向け skill（Agent Skills 標準）
+    ├── install.sh                    # skills/<name>/ をグローバル skill ディレクトリへ symlink 設置
+    └── webtunnel/                    # 利用者（AI エージェント）の入口となる skill
 ```
 
 ## セットアップ手順

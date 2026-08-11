@@ -32,6 +32,16 @@ CDP は Host ヘッダの制約で MagicDNS 名では接続できないため、
 
 自分のプロジェクトを runner 上で起動して確認する手順は PROJECT.md「新しいプロジェクトに webtunnel を導入する」を参照。
 
+## AI エージェントから使う（skill）
+
+`skills/webtunnel/` に Claude Code / Codex CLI 用の skill を同梱している。次のコマンドでグローバルの skill ディレクトリ（`~/.claude/skills` / `~/.agents/skills` / `~/.codex/skills` のうち存在するもの）へ symlink を張ると `/webtunnel` で使える。
+
+```bash
+skills/install.sh
+```
+
+symlink の向き先は実行したチェックアウトになるため、常設で使う場合は worktree ではなくメインのチェックアウトから実行する。冪等なので再実行しても安全（既に別の実体がある場合は上書きせずエラーになる）。
+
 ## Status
 
 Phase 1（疎通）・Phase 2（dev サーバ起動と各アプリ repo への導入手順）実装済み。設計の SSOT は PROJECT.md。
