@@ -10,6 +10,8 @@ SETUP_COMMAND="${SETUP_COMMAND:-}"
 WORKING_DIRECTORY="${WORKING_DIRECTORY:-.}"
 PORT="${PORT:-5173}"
 READY_PATH="${READY_PATH:-/}"
+# 先頭スラッシュ無しで渡されると URL が壊れる（http://127.0.0.1:5173health になる）ため補う
+[[ "$READY_PATH" == /* ]] || READY_PATH="/${READY_PATH}"
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 WORK="${RUNNER_TEMP:-$(pwd)/tmp}"
 SETUP_LOG="$WORK/webtunnel-dev-server-setup.log"

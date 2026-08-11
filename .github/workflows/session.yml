@@ -26,7 +26,7 @@ on:
         required: false
         default: ""
       start_command:
-        description: "dev サーバを起動するコマンド（例: npm run dev）。空なら dev サーバを起動しない"
+        description: "dev サーバを起動するコマンド（例: npm run dev）。フォアグラウンドで動き続けるプロセスにする（デーモン化するとプロセス監視が起動失敗と誤認する）。空なら dev サーバを起動しない"
         type: string
         required: false
         default: ""
@@ -96,6 +96,11 @@ jobs:
           }
           [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || {
             echo "port は 1〜65535 の整数: $PORT" >&2
+            exit 1
+          }
+          # CDP と同じポートだと start-chromium.sh の CDP 応答待ちが dev サーバの応答を CDP と誤認する
+          [ "$PORT" != "$CDP_PORT" ] || {
+            echo "port は CDP のポート ${CDP_PORT} と別にする" >&2
             exit 1
           }
           # 空だと webtunnel の checkout がデフォルトブランチに落ちて workflow と scripts の版がずれる
