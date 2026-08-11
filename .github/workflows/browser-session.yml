@@ -26,6 +26,10 @@ on:
         description: "セッション画面を録画して artifact に残す"
         required: false
         default: "true"
+      setup_script:
+        description: "ログイン等のセットアップスクリプトのパス（存在しなければスキップ）"
+        required: false
+        default: ".webtunnel/setup.sh"
 
 jobs:
   session:
@@ -39,6 +43,8 @@ jobs:
       duration_minutes: ${{ inputs.duration_minutes }}
       start_url: ${{ inputs.start_url }}
       record: ${{ inputs.record }}
+      setup_script: ${{ inputs.setup_script }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+      WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}

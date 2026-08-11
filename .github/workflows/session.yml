@@ -25,11 +25,19 @@ on:
         type: string
         required: false
         default: "true"
+      setup_script:
+        description: "ログイン等のセットアップスクリプト（caller repo 基準のパス。存在しなければスキップ）"
+        type: string
+        required: false
+        default: ".webtunnel/setup.sh"
     secrets:
       TS_OIDC_CLIENT_ID:
         required: true
       TS_OIDC_AUDIENCE:
         required: true
+      WEBTUNNEL_AUTH_ENV:
+        description: "setup_script へ渡す KEY=VALUE 列を base64 で単一行にしたもの（PROJECT.md「ログイン済み状態でのセッション開始」参照）"
+        required: false
 
 env:
   # CDP の待ち受けポート。local/webtunnel CLI・bridge・keepalive すべてこの値を前提にする
@@ -87,6 +95,15 @@ jobs:
         env:
           START_URL: ${{ inputs.start_url }}
         run: ./webtunnel/runner/start-chromium.sh
+
+      # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
+      # 入れ替えると認証情報が artifact に残りうる（参照: PROJECT.md「ログイン済み状態でのセッション開始」）
+      - name: セッションを初期化
+        timeout-minutes: 10
+        env:
+          SETUP_SCRIPT: ${{ inputs.setup_script }}
+          WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
+        run: ./webtunnel/runner/run-auth-setup.sh
 
       - name: 録画を開始
         if: inputs.record == 'true'

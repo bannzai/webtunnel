@@ -60,6 +60,44 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
   --cdp http://<tailscale IP>:9222 open https://example.com
 ```
 
+### ログイン済み状態でのセッション開始
+
+多くのプロダクトは主要画面がログインの向こう側にあるため、ログイン不要な画面しか触れないとセッションの用途が限られる。simtunnel の「オンボーディング突破用 Maestro flow の自動実行」と同じ考え方で、**定型のログインを runner 側のセットアップスクリプトに任せ、セッションはログイン済みの状態から始める**。
+
+- **自動検出**: caller repo に `.webtunnel/setup.sh` があれば実行、なければスキップ。パスは `setup_script` input で差し替えられる（`local/webtunnel up <session> --setup-script <path>`）
+- **実行順序は Chromium 起動後 → 録画開始前 → tailnet 参加前**。この順序が認証情報の露出を止める要（後述）であり、入れ替えてはいけない
+- **操作は agent-browser の CDP 接続**: 自前の CDP クライアントは作らない（「操作レイヤー」の判断をそのまま適用）。`run-auth-setup.sh` が runner に agent-browser を版指定で入れ、`WEBTUNNEL_CDP_URL`（`http://127.0.0.1:9222`）を環境変数で渡す。cwd は caller repo の workspace ルート
+- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない
+- 実装は `runner/run-auth-setup.sh`、サンプル兼検証用のセットアップスクリプトは `examples/auth-demo/`
+
+#### 認証情報の受け渡し
+
+認証情報は secret `WEBTUNNEL_AUTH_ENV` で渡す。**`KEY=VALUE` を並べたものを base64 で単一行にした値**を登録し、`run-auth-setup.sh` が復号してセットアップスクリプトの環境変数にする。
+
+```bash
+printf 'APP_LOGIN_EMAIL=dev@example.com\nAPP_LOGIN_PASSWORD=xxxx\n' | base64 |
+  gh secret set WEBTUNNEL_AUTH_ENV -R <owner>/<repo>
+```
+
+複数行の secret がログでどう伏字になるかに依存しない設計にするため、base64 で単一行に畳む。復号後の値は 1 つずつ `::add-mask::` に登録してから環境変数にするため、**セットアップスクリプトが誤って出力しても Actions ログでは伏字**になる。add-mask はジョブ全体に効くので、以降の step（`keepalive.sh` が出す chrome.log の末尾など）でも同じく伏字になる。
+
+#### 認証情報を Actions のログ・artifact に残さないための設計
+
+1. **渡してよいのは開発環境用アカウントの資格情報だけ**: 本番アカウント・個人アカウントの資格情報を `WEBTUNNEL_AUTH_ENV` に入れない。runner は使い捨てとはいえ、ログイン後の画面は録画に残る
+2. **ログイン操作は録画しない**: セットアップは録画開始前に走るため、入力中のフォーム（ユーザー名の表示・パスワードの打鍵）は録画に一切写らない。録画は「ログイン済みの画面」から始まる
+3. **セットアップ失敗時は about:blank に戻す**: 失敗するとユーザー名が見えたままのフォームが画面に残り、直後に始まる録画へ写り込む。`run-auth-setup.sh` は失敗時にブラウザを `about:blank` へ戻してから録画開始へ進む
+4. **ログの伏字は add-mask で担保する**: 上記のとおり復号した値を個別に登録する。セットアップスクリプト側でも `set -x` を使わない
+5. **artifact は録画だけ**: アップロードするのは `webtunnel-recording.mp4` のみで、セットアップの生成物（サーバのログ等）は artifact に含めない
+6. **tailnet 参加前に完了する**: ログインは tailnet に出る前に終わるため、認証のやり取りが tailnet 上を流れることもない
+
+なお、**認証情報を Actions へ一切渡さない経路**もある。セッションが ready になった後、ローカルの agent-browser で cookie / storage state を注入する方法で、runner 側の変更も secret の登録も要らない。ローカルで一度ログインして保存した状態をそのまま持ち込む用途に向く。
+
+```bash
+agent-browser --cdp http://<tailscale IP>:9222 --state ./tmp/state.json open http://localhost:3000
+```
+
+自動でログイン済みのセッションが立ち上がる利便性を取るなら `WEBTUNNEL_AUTH_ENV`、Actions に資格情報を置きたくないならローカル注入を選ぶ。
+
 ### リポジトリ公開に耐える安全性
 
 リポジトリは public で運用する（Linux runner 無料）。tailnet 内の実 IP 等の環境固有情報はこのリポジトリに書かない。simtunnel の PROJECT.md「リポジトリ公開に耐える安全性」と同一の原則を適用する:
@@ -73,6 +111,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 7. **`timeout-minutes` でセッション上限**: 消し忘れても最大 6 時間で必ず落ちる
 8. **サードパーティ action は commit SHA で固定**: `uses:` はフルレングスの commit SHA + バージョンコメントで固定する。バージョン更新時は `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` で SHA を確認して書き換える
 9. **runner スクリプトは workflow と同一 commit に固定**: reusable workflow（session.yml）は runner スクリプトを `job.workflow_repository` / `job.workflow_sha` で checkout する。caller が `uses:` を SHA 固定していれば、実行されるスクリプトも同じ SHA に固定される
+10. **セッションに持ち込む認証情報を漏らさない**: base64 単一行の secret + `add-mask`、ログイン操作を録画開始前に済ませる順序、開発環境用アカウント限定の運用で担保する（「ログイン済み状態でのセッション開始」の「認証情報を Actions のログ・artifact に残さないための設計」）
 
 ### 各アプリ repo での実行（reusable workflow）
 
@@ -108,6 +147,8 @@ jobs:
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+      # ログイン済み状態で始める場合のみ（.webtunnel/setup.sh を置いた repo）
+      WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
 ```
 
 ## リポジトリ構成
@@ -121,10 +162,15 @@ webtunnel/
 │   └── browser-session.yml           # workflow_dispatch: webtunnel 自身用の薄いラッパー（session.yml を呼ぶ）
 ├── runner/                           # GHA 側スクリプト
 │   ├── start-chromium.sh             # Xvfb + headed Chromium 起動 + CDP 応答待ち
+│   ├── run-auth-setup.sh             # caller repo のセットアップスクリプト実行（ログイン済み状態を作る）
 │   ├── start-recording.sh            # ffmpeg x11grab で録画開始（fragmented MP4）
 │   ├── stop-recording.sh             # 録画を SIGINT で停止してファイナライズ
 │   ├── bridge.sh                     # socat: tailscale IF → CDP ポート（直接到達可能ならスキップ）
 │   └── keepalive.sh                  # duration_minutes までジョブを維持（CDP 死活監視付き）
+├── examples/
+│   └── auth-demo/                    # ログイン必須ページを立てて突破するサンプル兼検証用
+│       ├── server.py                 # cookie が無いと中身が見えないデモサーバ
+│       └── setup.sh                  # setup_script のサンプル（agent-browser でフォームログイン）
 └── local/
     └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / screenshot / wait
 ```
@@ -171,7 +217,7 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 ```text
 1. webtunnel up <session>
      └─ gh workflow run browser-session.yml -f session=<session>
-2. Runner: Xvfb + Chromium 起動 → 録画開始 → tailscale join (hostname=webtunnel-<session>) → socat bridge
+2. Runner: Xvfb + Chromium 起動 → セットアップ（ログイン）→ 録画開始 → tailscale join (hostname=webtunnel-<session>) → socat bridge
 3. Local: webtunnel status <session>（= http://<tailscale IP>:9222/json/version）が 200 になったら ready
 4. agent-browser --cdp http://<tailscale IP>:9222 で操作
 5. webtunnel down <session>
@@ -184,6 +230,8 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 - セッション疎通: `local/webtunnel status <session>` が HTTP 200 で Browser / webSocketDebuggerUrl を返すこと
 - 操作: `agent-browser --cdp http://<IP>:9222 open https://example.com` → `screenshot ./tmp/xx.png` が撮れること
 - 録画: セッション終了後、`gh run download <run-id> -R bannzai/webtunnel -n recording-<session>` で mp4 が取得でき再生できること
+- ログイン済み状態: `--setup-script examples/auth-demo/setup.sh` で起動したセッションで、ローカルの agent-browser から `http://127.0.0.1:8123/` を開くとログインフォームではなく保護されたページが見えること
+- 認証情報の非露出: 同じ run の `gh run view <run-id> --log` と録画 artifact に、`WEBTUNNEL_AUTH_ENV` に入れたパスワードとログインフォームが現れないこと
 
 ## 実装フェーズ
 
@@ -209,7 +257,7 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 
 ### Phase 2: 各アプリ repo への展開
 
-- caller repo の dev サーバ起動（`setup_command` 相当の input）の設計。dev サーバは runner の localhost で動かし、Chromium からは `http://localhost:<port>` で開く
+- ログイン済み状態でのセッション開始（`setup_script` / `WEBTUNNEL_AUTH_ENV`）は実装済み。dev サーバの起動も同じセットアップスクリプトで行う（`examples/auth-demo/setup.sh` がデモサーバを立てているのと同じ形）。dev サーバは runner の localhost で動かし、Chromium からは `http://127.0.0.1:<port>` で開く
 - 録画 / スクリーンショットを PR コメントへ自動添付するフロー（gh-r2-image skill との接続）
 
 ## 未検証事項・リスク
