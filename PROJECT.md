@@ -84,7 +84,8 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える
 - **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
 - **caller のコマンドに OIDC トークンの発行能力を渡さない**。`id-token: write` の job では全 step に `ACTIONS_ID_TOKEN_REQUEST_*` が注入され、`setup_command` が走らせる依存パッケージの install script（サプライチェーン）が Tailscale の trust credential に使える token を発行できてしまう。start-dev-server.sh が実行前に unset する
-- **runner スクリプトの checkout は `.webtunnel`（dot 付き）に置く**。checkout はパス先の既存内容を消すため、caller リポジトリのルートに同名ディレクトリがあると壊してしまう。dot 付きにして衝突しにくくする
+- **runner スクリプトの checkout は `.webtunnel`（dot 付き）に置く**。checkout はパス先の既存内容を消すため、caller リポジトリのルートに同名ディレクトリがあると壊してしまう。dot 付きにして衝突しにくくしたうえで、それでも存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
+- **`up --wait` の待機は既定 20 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 step の上限 15 分 + Chromium / Tailscale のセットアップを覆う。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
