@@ -35,7 +35,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 - **CDP への接続は tailscale IP で行う。** Chromium は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、MagicDNS 名（`webtunnel-<session>`）では接続できない。IP は `webtunnel-cli.sh cdp <session>` が出力する。
 - **画面の状態は実スクリーンショットを Read して判断する。** workflow のログや `status` の HTTP 200 だけで「表示できている」と判断しない。
 - **runner から到達できる URL しか開けない。** ローカルマシンで動いている dev サーバは runner の Chromium からは見えない。
-- セッションは使う時だけ up し、終わったら down する（放置しても `duration_minutes` で自動終了する）。
+- セッションは使う時だけ up し、終わったら down する（放置しても `duration_minutes`（既定 60 分）で自動終了する）。
 
 ## ファイル構成
 
@@ -56,7 +56,7 @@ READY なら Phase 2 へ進む。NOT_READY は出力された対処を実施し�
 
 READY でも、次に当たる場合はローカルの `agent-browser` skill に倒す:
 
-- 即時性が最優先（webtunnel はセッションが ready になるまで 3 分前後かかる。ローカルブラウザは即時）
+- 即時性が最優先（webtunnel はセッションが ready になるまで数分かかる。ローカルブラウザは即時。所要時間の実測値は PROJECT.md「Phase 1 実測」を参照）
 - 開く対象がローカルでしか動いていない（runner の Chromium から localhost は runner 自身を指す）
 - 未公開の機能を扱う（public repo では Actions のログと artifact が公開される）
 
@@ -110,10 +110,9 @@ bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.sh <session> ./tmp
 
 ## 制約・ハマりどころ
 
-- MagicDNS 名では CDP に接続できない（前述）。run を作り直すと tailscale IP が変わるため、繋がらなくなったら `cdp` で引き直す
+- run を作り直すと tailscale IP が変わる。繋がらなくなったら `cdp` で引き直す
 - 同名セッションを down せずに再 up すると、新しい run は前の run の終了までキューで待つ。作り直す時は先に down する
 - public repo では Actions のログと artifact（録画・スクリーンショット）が公開される
-- セッションは `duration_minutes`（既定 60 分）で自動終了する
 
 ## エラーハンドリング
 
