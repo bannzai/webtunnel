@@ -1,0 +1,66 @@
+:root {
+  color-scheme: light;
+  font-family: system-ui, "Noto Sans JP", sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #f5f6f8;
+  color: #1b1c1e;
+}
+
+/* runner の Chromium は 1280x800 で起動するため、スクロールせずに全要素が入る高さに収める */
+main {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.4rem;
+}
+
+.lead {
+  margin: 0;
+  color: #4a4d52;
+}
+
+section {
+  margin-top: 1rem;
+  padding: 0.75rem 1.25rem;
+  background: #ffffff;
+  border: 1px solid #dfe1e5;
+  border-radius: 0.5rem;
+}
+
+h2 {
+  margin-top: 0;
+  font-size: 1.1rem;
+}
+
+button {
+  padding: 0.4rem 1rem;
+  font: inherit;
+  color: #ffffff;
+  background: #2f6feb;
+  border: none;
+  border-radius: 0.35rem;
+  cursor: pointer;
+}
+
+input {
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  border: 1px solid #b9bcc2;
+  border-radius: 0.35rem;
+}
+
+label {
+  margin-right: 0.5rem;
+}
+
+output {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
