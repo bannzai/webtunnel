@@ -6,6 +6,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 
 - ローカルマシンのリソースを消費せずに、ブラウザでの動作確認を GHA runner 上で行う
 - agent-browser の CDP 接続（`--cdp`）で、tailnet 越しに runner 上の Chromium を操作する
+- セッション中の画面をリアルタイムに見る（preview）
 - 動作確認の過程（録画）を artifact として PR に残す
 
 ## 使い方
@@ -16,6 +17,9 @@ local/webtunnel up dev --wait
 
 # 接続情報（tailscale IP ベースの CDP URL）を表示
 local/webtunnel cdp dev
+
+# セッション画面のライブ映像をブラウザで開く
+local/webtunnel preview dev
 
 # agent-browser で操作（--session は作業スペース名にする）
 agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
