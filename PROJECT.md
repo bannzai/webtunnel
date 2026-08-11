@@ -66,7 +66,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 
 1. **公開エンドポイントゼロ**: CDP は tailnet 内からしか到達できない
 2. **トリガーは `workflow_dispatch` のみ**: 起動できるのは write 権限者だけ。fork からの PR には Secrets / OIDC トークンの権限が渡らない
-3. **長期シークレットを持たない（OIDC / workload identity federation）**: Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` は識別子であり秘密情報ではない。simtunnel と同一の trust credential（subject `repo:bannzai/*` のワイルドカード）・同一の Secrets 値を使う
+3. **長期シークレットを持たない（OIDC / workload identity federation）**: Tailscale への認証は、GitHub が workflow に発行する短命の OIDC トークンで行う。subject が credential に登録した値に一致する workflow しか認証できず、盗まれて困る静的シークレットがそもそも存在しない（Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` は識別子であり秘密情報ではない）
 4. **Tailscale ACL で双方向を絞る**: `tag:ci` からの発信は全拒否（simtunnel セットアップ時に設定済みのポリシーをそのまま使う。webtunnel 固有の追加設定は不要）
 5. **ACL 設定 → runner 参加の順序は入れ替え不可**: simtunnel の Phase 0 で設定済みのため webtunnel では新規作業なし
 6. **ephemeral node**: ジョブ終了と同時に tailnet から自動削除される。また workflow は CDP がローカルで応答してから tailnet に参加する（tailnet 内にいる時間を最小化）
@@ -79,7 +79,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 GitHub の Additional Product Terms は、GitHub-hosted runner の用途を「workflow が動く repo に紐づくソフトウェアプロジェクト」の production / testing / deployment / publication に限定している。webtunnel の runner で他アプリの dev サーバを動かして動作確認するのはこれに抵触するため、**実アプリで使う時は各アプリ repo で workflow を動かす**（simtunnel と同じ判断）。
 
 - `session.yml` を reusable workflow（`workflow_call`）とし、各アプリ repo からは薄い caller workflow で呼ぶ。webtunnel 自身は `browser-session.yml`（`workflow_dispatch` ラッパー）経由で呼ぶ
-- アプリ repo 側に Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）の登録が必要。trust credential は subject ワイルドカード（`repo:bannzai/*`）のため simtunnel と同一の値でよい
+- アプリ repo 側に Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）の登録が必要。OIDC token の subject は caller repo 基準になるため、**caller repo の作成時期に応じて subject 形式が変わる**（「セットアップ手順」の immutable ID 形式を参照）。simtunnel の credential を流用できるとは限らない
 - caller repo 上で dev サーバをビルド・起動してから session.yml を呼ぶ形（simtunnel の `build_project` に相当する input）は Phase 2 で設計する（「実装フェーズ」参照）
 
 caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）:
@@ -131,14 +131,40 @@ webtunnel/
 
 ## セットアップ手順
 
-Tailscale 側（ACL・trust credential）は simtunnel の Phase 0 で設定済みのものを共用する（trust credential の subject が `repo:bannzai/*` のワイルドカードのため、webtunnel も同じ credential で認証できる）。webtunnel 固有の作業は GitHub Secrets の登録のみ:
+Tailscale の ACL は simtunnel の Phase 0 で設定済みのものを共用する（`tag:ci` の発信全拒否）。trust credential は後述の理由で webtunnel 専用に発行する。
+
+### OIDC subject は immutable ID 形式になる（重要）
+
+GitHub は 2026-07-15 以降に作成されたリポジトリの OIDC subject claim を **immutable ID 形式**にした。owner 名・repo 名に数値 ID が付き、`include_claim_keys` でカスタマイズしても ID は除去できない（参照: https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/ ）。
+
+```text
+従来（simtunnel 等、2026-07-15 より前に作成）: repo:bannzai/simtunnel:ref:refs/heads/main
+immutable（webtunnel 等、それ以降に作成）:     repo:bannzai@<owner-id>/webtunnel@<repo-id>:ref:refs/heads/main
+```
+
+このため **simtunnel の credential（subject `repo:bannzai/*`）は webtunnel をカバーできない**。webtunnel 用に別の trust credential を発行する。対象リポジトリの subject 接頭辞は次で取得する:
+
+```bash
+gh api /repos/bannzai/webtunnel/actions/oidc/customization/sub --jq '.sub_claim_prefix'
+```
+
+### 1. Trust credential の発行（OIDC）
+
+https://login.tailscale.com/admin/settings/trust-credentials
+
+1. **New credential** → credential type で **OpenID Connect** を選択
+2. Issuer: **GitHub** / Subject: 上記コマンドが返した接頭辞に `:*` を付けた値
+3. Scopes: **Custom scopes** の一覧から **Keys > Auth Keys** の **Write** にチェック → タグは **tag:ci** を選択
+4. 発行された **Client ID** と **Audience** を控える（OAuth client と違い secret は存在しない）
+
+### 2. GitHub Secrets への登録
 
 ```bash
 gh secret set TS_OIDC_CLIENT_ID -R bannzai/webtunnel
 gh secret set TS_OIDC_AUDIENCE -R bannzai/webtunnel
 ```
 
-値は simtunnel に登録したものと同一（識別子であり秘密情報ではない。simtunnel PROJECT.md「Tailscale セットアップ手順」参照）。
+Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作成時期によって subject 形式が変わる。展開先ごとに `sub_claim_prefix` を確認してから credential の subject を決める。
 
 ## セッションのライフサイクル
 
