@@ -2,7 +2,7 @@
 # WebTunnel ローカル CLI。GHA 上の Chromium (CDP) セッションを管理する。
 #
 # 使い方:
-#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--no-preview] [--wait]
+#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--no-preview] [--no-sample-app] [--wait]
 #   webtunnel down <session>
 #   webtunnel list
 #   webtunnel status <session>
@@ -46,7 +46,7 @@ session_run_ids() {
 
 cmd_up() {
   local session=$1; shift
-  local duration=60 start_url="" ref="" record="" preview="" wait=0
+  local duration=60 start_url="" ref="" record="" preview="" sample_app="" wait=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --duration) duration=$2; shift 2 ;;
@@ -54,6 +54,7 @@ cmd_up() {
       --ref) ref=$2; shift 2 ;;
       --no-record) record="false"; shift ;;
       --no-preview) preview="false"; shift ;;
+      --no-sample-app) sample_app="false"; shift ;;
       --wait) wait=1; shift ;;
       *) echo "不明なオプション: $1" >&2; exit 1 ;;
     esac
@@ -74,6 +75,7 @@ cmd_up() {
   if [ -n "$start_url" ]; then inputs+=(-f start_url="$start_url"); fi
   if [ -n "$record" ]; then inputs+=(-f record="$record"); fi
   if [ -n "$preview" ]; then inputs+=(-f preview="$preview"); fi
+  if [ -n "$sample_app" ]; then inputs+=(-f sample_app="$sample_app"); fi
   gh workflow run "$WORKFLOW" -R "$REPO" ${ref:+--ref "$ref"} "${inputs[@]}"
   echo "dispatched: session=${session} duration=${duration}分${ref:+ ref=${ref}}"
 
@@ -84,20 +86,30 @@ cmd_up() {
   fi
 }
 
-# CDP が応答するまで待つ（最大 10 分。Linux runner はセットアップが軽く数分で ready になる）
+# CDP が応答するまで待つ（既定 20 分。setup_command が重いプロジェクトは WEBTUNNEL_WAIT_MINUTES で延ばす）。
+# run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 cmd_wait() {
   local session=$1
-  echo "webtunnel-${session} の準備完了を待機中..."
-  for _ in $(seq 1 60); do
+  local minutes="${WEBTUNNEL_WAIT_MINUTES:-20}"
+  echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
+  local end=$(( $(date +%s) + minutes * 60 ))
+  local checks=0
+  while [ "$(date +%s)" -lt "$end" ]; do
     local ip
     ip=$(session_ip "$session")
     if [ -n "$ip" ] && curl -s -m 5 "http://${ip}:${CDP_PORT}/json/version" >/dev/null 2>&1; then
       echo "ready: http://${ip}:${CDP_PORT} (webtunnel-${session})"
       return 0
     fi
+    # dispatch 直後は run 一覧への反映が遅れるため、最初の 30 秒は run の存在チェックをしない
+    checks=$((checks + 1))
+    if [ "$checks" -gt 3 ] && [ -z "$ip" ] && [ -z "$(session_run_ids "$session")" ]; then
+      echo "セッション ${session} の run が存在しない（失敗または cancel）。確認: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
+      return 1
+    fi
     sleep 10
   done
-  echo "10 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
+  echo "${minutes} 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
   return 1
 }
 

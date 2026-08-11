@@ -18,8 +18,10 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 ┌──────────────────────┐                 ┌───────────────────────────────────┐
 │ local/webtunnel CLI  │ gh workflow run  │ browser-session.yml (dispatch)    │
 │ agent-browser --cdp ─┼───┐             │  └─ session.yml (reusable)        │
-│ ブラウザ (preview) ──┼─┐ │             │      Xvfb :99 (1280x800)          │
-└──────────────────────┘ │ │  tailnet    │      └─ Chromium (headed)         │
+│ ブラウザ (preview) ──┼─┐ │             │      dev サーバ 127.0.0.1:5173    │
+└──────────────────────┘ │ │  tailnet    │      Xvfb :99 (1280x800)          │
+                         │ │             │      └─ Chromium (headed)         │
+                         │ │             │          開く先 localhost:5173    │
                          │ │             │          CDP 127.0.0.1:9222       │
                          │ └─────────────┼──→ socat: TS_IP:9222 → 127.0.0.1  │
                          │               │      preview 127.0.0.1:9100       │
@@ -30,6 +32,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 
 - runner は ephemeral node として tailnet に参加し、ホスト名は `webtunnel-<session>` になる
 - CDP はローカルの 127.0.0.1:9222 で待ち受け、socat で tailscale インターフェースへ中継する
+- dev サーバは runner の localhost だけで動かし、tailnet には出さない（見るのは同じ runner 上の Chromium のため）
 - preview（ライブ映像）は 127.0.0.1:9100 で待ち受け、CDP と同じく socat で中継する
 - 録画は Xvfb の画面全体を ffmpeg (x11grab) で撮り、セッション終了時に artifact `recording-<session>` へアップロードする
 
@@ -74,6 +77,39 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
   --cdp http://<tailscale IP>:9222 open https://example.com
 ```
 
+### dev サーバの起動
+
+動作確認の対象は caller リポジトリのプロジェクトであり、runner 上で dev サーバを起動して Chromium から `http://localhost:<port>` を開く。simtunnel の `build_project` / `build_scheme` 相当を Web 向けに置き換えた input を `session.yml` に持たせる。
+
+| input | 役割 |
+|---|---|
+| `setup_command` | dev サーバ起動前のセットアップ（例: `npm ci`）。空ならスキップ |
+| `start_command` | dev サーバの起動（例: `npm run dev`）。空なら dev サーバを起動しない |
+| `working_directory` | 上記 2 つを実行する caller リポジトリルート相対のディレクトリ |
+| `port` | dev サーバが listen するポート |
+| `ready_path` | ready 判定に使うパス |
+| `node_version` | `actions/setup-node` で用意する Node のバージョン。空なら runner のプリインストール版 |
+
+- **ポートは `PORT` 環境変数として両コマンドへ渡す**。`port` input を SSOT にして、コマンド文字列側にポート番号を重複させない。Next.js / Nuxt / CRA は `PORT` をそのまま解釈し、Vite は `vite.config.js` で `process.env.PORT` を読む
+- **ready 判定は `http://127.0.0.1:<port><ready_path>` への到達**とし、HTTP ステータスは問わない（応答がある = listen している）。dev サーバのプロセスが死んだら待たずに即失敗させ、ログ末尾を step の出力に出す。ready 後もプロセス ID を keepalive に引き継いで監視し、死んだらセッションを終了する（動作確認の対象が消えたセッションを維持しない）
+- **ツールチェーン準備は session.yml 側**に持つ。reusable workflow の呼び出しは job 単位で、caller は job の中に step を差し込めないため。Node 以外（Python / Ruby / Go 等）は ubuntu-latest のプリインストール版を `setup_command` から使う
+- **ビルド成果物を artifact 経由で受け取る経路（simtunnel の `app_artifact` 相当）は作らない**。simtunnel でこれが要るのは、macOS runner が高価でビルドを別 job に切り出す動機があり、かつ Flutter 等が `xcodebuild` 直叩きで表現できないため。Web は `setup_command` に任意のシェルコマンドを書けて Linux runner も安価なため、同一 job でビルドすれば足りる。必要になったら caller 側の build job + `download-artifact` を足す
+- `start_url` を省略した時は `http://localhost:<port>/` を開く。dev サーバを起動しない場合だけ `about:blank` になる
+- dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える
+- **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
+- **caller のコマンドに OIDC トークンの発行能力を渡さないハードニング**。`id-token: write` の job で `setup_command` が走らせる依存パッケージの install script が Tailscale の trust credential に使える token を発行するのを防ぐ。start-dev-server.sh は `ACTIONS_ID_TOKEN_REQUEST_*` を外し、`GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行する（完全な隔離ではない。「リポジトリ公開に耐える安全性」の残存リスク参照）
+- **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
+- **runner スクリプトの checkout は `.webtunnel`（dot 付き）に置く**。checkout はパス先の既存内容を消すため、caller リポジトリのルートに同名ディレクトリがあると壊してしまう。dot 付きにして衝突しにくくしたうえで、それでも存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
+- **`up --wait` の待機は既定 20 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 step の上限 15 分 + Chromium / Tailscale のセットアップを覆う。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+
+### 自己検証用のサンプル Web アプリ（webProject）
+
+`webProject/` に Vite の最小サンプルアプリを置き、`browser-session.yml` の `sample_app`（既定 `true`）でこれを dev サーバとして起動する。simtunnel の `iOSProject/` + `sample_app` と同じ位置づけで、外部サイトに依存せず webtunnel 単体で「起動 → 操作」まで検証できる。
+
+- 動作確認で意味を持つ要素を 1 ページに置く: クリックで変わるカウンタ、フォーム入力、日本語テキスト（CJK フォント確認）、非同期に更新される要素（`public/items.json` の fetch と経過秒数）
+- runner の Chromium（1280x800 のウィンドウ = 高さ 650px 前後のビューポート）でスクロールせずに全要素が入るレイアウトにする。録画・スクリーンショットに全要素が写るため
+- 依存は Vite のみ。dev サーバ起動の input（`setup_command` = `npm ci` / `start_command` = `npm run dev` / `node_version`）を実際に通す検証対象を兼ねる
+
 ### 利用者向け skill はこのリポジトリに置き、symlink で設置する
 
 simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポジトリ（bannzai/castle）に実体を置いているが、webtunnel の skill は**本リポジトリの `skills/` に実体を置く**。CLI（`local/webtunnel`）・workflow・runner スクリプトと同じ変更で skill を更新でき、実装と入口がずれないため。
@@ -96,6 +132,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 8. **サードパーティ action は commit SHA で固定**: `uses:` はフルレングスの commit SHA + バージョンコメントで固定する。バージョン更新時は `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` で SHA を確認して書き換える
 9. **runner スクリプトは workflow と同一 commit に固定**: reusable workflow（session.yml）は runner スクリプトを `job.workflow_repository` / `job.workflow_sha` で checkout する。caller が `uses:` を SHA 固定していれば、実行されるスクリプトも同じ SHA に固定される
 10. **録画 artifact は公開される前提で使う**: public リポジトリの artifact はリポジトリの read 権限で取得でき、public repo では GitHub にログインした誰でもダウンロードできる（保持 7 日）。preview・CDP は tailnet 内限定だが、同じ画面が録画にも映るため、セッション画面に映すのは公開されてよい内容に限る。ログイン等の秘匿情報を扱う確認は `up --no-record` で録画を無効にする
+11. **caller のコマンドへ OIDC 発行能力を渡さないハードリング（完全な隔離ではない）**: `session.yml` の job は Tailscale 認証に `id-token: write` を持つため、`setup_command` / `start_command`（依存パッケージの install script を含む）が OIDC トークンを発行できると、tag:ci の auth key を mint できてしまう。`start-dev-server.sh` は caller のコマンドを (a) `ACTIONS_ID_TOKEN_REQUEST_*` を外し、(b) `GITHUB_ENV` / `GITHUB_PATH` / `GITHUB_OUTPUT` / `GITHUB_STATE` を使い捨てファイルへ向けた env で実行し、現ステップでの発行と後続ステップへの環境注入（`BASH_ENV` 等）の両経路を塞ぐ。**ただし同一 VM・`sudo` NOPASSWD のため完全な隔離ではない**（悪意ある caller は別 step のプロセスを覗く等で回避しうる）。残存リスクを受け入れられるのは次の多層防御による: mint できるのは tag:ci の auth key のみ / tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。完全分離は別 job かコンテナ隔離が要るが、dev サーバは session job と同じ runner の localhost で動かす必要があり（tailnet に出さないため）今回は採らない
 
 ### 各アプリ repo での実行（reusable workflow）
 
@@ -103,15 +140,18 @@ GitHub の Additional Product Terms は、GitHub-hosted runner の用途を「wo
 
 - `session.yml` を reusable workflow（`workflow_call`）とし、各アプリ repo からは薄い caller workflow で呼ぶ。webtunnel 自身は `browser-session.yml`（`workflow_dispatch` ラッパー）経由で呼ぶ
 - アプリ repo 側に Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）の登録が必要。OIDC token の subject は caller repo 基準になるため、**caller repo の作成時期に応じて subject 形式が変わる**（「セットアップ手順」の immutable ID 形式を参照）。simtunnel の credential を流用できるとは限らない
-- caller repo 上で dev サーバをビルド・起動してから session.yml を呼ぶ形（simtunnel の `build_project` に相当する input）は Phase 2 で設計する（「実装フェーズ」参照）
+- 起動するプロジェクトは input で渡す（「dev サーバの起動」参照）。`working_directory` は caller リポジトリルート相対
 
 caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）。`local/webtunnel` は `--start-url` / `--no-record` / `--no-preview` を対応する input の `-f` として送り、**caller 側で未宣言の input を送ると dispatch 自体が拒否される**ため、CLI の全オプションを使えるよう任意 input もパススルーで宣言しておく:
 
 ```yaml
 name: browser-session
+# run-name は local/webtunnel CLI が run を特定するキーのためこの形式を維持する
 run-name: "session=${{ inputs.session }} duration=${{ inputs.duration_minutes }}m"
 on:
-  workflow_dispatch:
+  workflow_dispatch: # fork PR に Secrets を渡さないため workflow_dispatch のみ
+    # session / duration_minutes は local/webtunnel の up が常に送るため宣言必須
+    # （未定義の input を送ると dispatch が拒否される）
     inputs:
       session:
         required: true
@@ -121,7 +161,7 @@ on:
         default: "60"
       start_url:
         required: false
-        default: "about:blank"
+        default: "" # 空なら dev サーバの URL を開く（session.yml 側の既定に合わせる）
       record:
         required: false
         default: "true"
@@ -133,16 +173,27 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    uses: bannzai/webtunnel/.github/workflows/session.yml@<commit SHA> # vX.Y.Z 相当のコメント
+    uses: bannzai/webtunnel/.github/workflows/session.yml@<commit SHA> # main
     with:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
       start_url: ${{ inputs.start_url }}
       record: ${{ inputs.record }}
       preview: ${{ inputs.preview }}
+      # 以下はアプリに合わせて固定値で書く（起動するのは常にこのプロジェクトのため）
+      setup_command: npm ci
+      start_command: npm run dev
+      port: "3000"
+      node_version: "22"
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+```
+
+ローカル CLI は `WEBTUNNEL_REPO` でアプリ repo に向ける（`WEBTUNNEL_WORKFLOW` は caller workflow のファイル名。既定 `browser-session.yml`）:
+
+```bash
+WEBTUNNEL_REPO=<owner>/<repo> local/webtunnel up <session> --wait
 ```
 
 ## リポジトリ構成
@@ -155,6 +206,7 @@ webtunnel/
 │   ├── session.yml                   # reusable workflow (workflow_call): Chromium セッションの実体
 │   └── browser-session.yml           # workflow_dispatch: webtunnel 自身用の薄いラッパー（session.yml を呼ぶ）
 ├── runner/                           # GHA 側スクリプト
+│   ├── start-dev-server.sh           # caller repo の dev サーバ起動 + 応答待ち（ログは artifact）
 │   ├── start-chromium.sh             # Xvfb + headed Chromium 起動 + CDP 応答待ち
 │   ├── start-recording.sh            # ffmpeg x11grab で録画開始（fragmented MP4）
 │   ├── stop-recording.sh             # 録画を SIGINT で停止してファイナライズ
@@ -162,6 +214,7 @@ webtunnel/
 │   ├── start-preview.sh              # preview サーバ起動 + listen 待ち
 │   ├── bridge.sh                     # socat: tailscale IF → 各ポート（直接到達可能ならスキップ）
 │   └── keepalive.sh                  # duration_minutes までジョブを維持（CDP 死活監視付き）
+├── webProject/                       # 自己検証用のサンプル Web アプリ（Vite）
 ├── local/
 │   └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / preview / screenshot / wait
 └── skills/                           # AI エージェント向け skill（Agent Skills 標準）
@@ -204,14 +257,55 @@ gh secret set TS_OIDC_CLIENT_ID -R bannzai/webtunnel
 gh secret set TS_OIDC_AUDIENCE -R bannzai/webtunnel
 ```
 
-Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作成時期によって subject 形式が変わる。展開先ごとに `sub_claim_prefix` を確認してから credential の subject を決める。
+## 新しいプロジェクトに webtunnel を導入する
+
+アプリ repo 側でやることの一覧。Tailscale の ACL（`tag:ci` の発信全拒否）は設定済みのものを共用するため、追加作業はない。
+
+### 1. subject 接頭辞を確認する
+
+credential の subject 形式は repo の作成時期で変わる（前掲「OIDC subject は immutable ID 形式になる」）。導入先ごとに実物を確認する:
+
+```bash
+gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'
+```
+
+### 2. trust credential を発行して Secrets に登録する
+
+返ってきた接頭辞に `:*` を付けた値を Subject にして credential を発行し（手順は「1. Trust credential の発行（OIDC）」と同じ）、導入先 repo に登録する:
+
+```bash
+gh secret set TS_OIDC_CLIENT_ID -R <owner>/<repo>
+gh secret set TS_OIDC_AUDIENCE -R <owner>/<repo>
+```
+
+既存の credential の subject がその repo をカバーしていれば（ワイルドカードの範囲内なら）発行は不要で、同じ Client ID / Audience をそのまま登録すればよい。
+
+### 3. caller workflow を追加する
+
+`.github/workflows/browser-session.yml` を「各アプリ repo での実行（reusable workflow）」の例をベースに作る。プロジェクトに合わせて変えるのは `setup_command` / `start_command` / `working_directory` / `port` / `node_version` の 5 つ。`uses:` の commit SHA は次で取得する:
+
+```bash
+gh api repos/bannzai/webtunnel/commits/main --jq '.sha'
+```
+
+### 4. 起動して確認する
+
+```bash
+WEBTUNNEL_REPO=<owner>/<repo> local/webtunnel up dev --wait
+WEBTUNNEL_REPO=<owner>/<repo> local/webtunnel cdp dev
+agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
+  --cdp http://<tailscale IP>:9222 snapshot
+```
+
+dev サーバが起動しない場合は run のログか artifact `dev-server-log-<session>` を見る。
 
 ## セッションのライフサイクル
 
 ```text
 1. webtunnel up <session>
      └─ gh workflow run browser-session.yml -f session=<session>
-2. Runner: Xvfb + Chromium 起動 → 録画開始 → preview 起動 → tailscale join (hostname=webtunnel-<session>) → socat bridge
+2. Runner: dev サーバ起動 → Xvfb + Chromium 起動（dev サーバの URL を開く）→ 録画開始 → preview 起動
+     → tailscale join (hostname=webtunnel-<session>) → socat bridge
 3. Local: webtunnel status <session>（= http://<tailscale IP>:9222/json/version）が 200 になったら ready
 4. agent-browser --cdp http://<tailscale IP>:9222 で操作。webtunnel preview <session> で画面を見る
 5. webtunnel down <session>
@@ -225,6 +319,7 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 - 操作: `agent-browser --cdp http://<IP>:9222 open https://example.com` → `screenshot ./tmp/xx.png` が撮れること
 - preview: `local/webtunnel preview <session>` で開いたページにセッションの画面が表示され、CDP 操作がライブ映像に反映されること
 - 録画: セッション終了後、`gh run download <run-id> -R bannzai/webtunnel -n recording-<session>` で mp4 が取得でき再生できること
+- dev サーバ: `local/webtunnel up <session> --wait` だけでサンプルアプリ（webProject）が開いた状態になり、`agent-browser --cdp http://<IP>:9222 snapshot` にカウンタ・フォーム・非同期に読み込んだ一覧が日本語で出ること。ボタンをクリックするとカウンタの表示が変わること
 
 ## 実装フェーズ
 
@@ -271,9 +366,29 @@ Phase 2 で各アプリ repo に展開する時も、そのリポジトリの作
 - 実測 fps が指定より 7〜18% 低いのは x11grab と JPEG エンコードのオーバーヘッド。指定 5fps / 1280 幅で最も落ち込む（4.10 fps）
 - MJPEG はフレーム間圧縮が無いため、帯域はほぼ「1 フレームのサイズ × fps」になる。解像度を半分にする方が quality を下げるより効く（1280 幅 93KB に対し 640 幅 29KB）
 
-### Phase 2: 各アプリ repo への展開
+### Phase 2: dev サーバ起動と各アプリ repo への導入手順
 
-- caller repo の dev サーバ起動（`setup_command` 相当の input）の設計。dev サーバは runner の localhost で動かし、Chromium からは `http://localhost:<port>` で開く
+- dev サーバ起動の input（`setup_command` / `start_command` / `working_directory` / `port` / `ready_path` / `node_version`）と `runner/start-dev-server.sh`
+- 自己検証用のサンプル Web アプリ（`webProject/`）と `browser-session.yml` の `sample_app` input
+- 「新しいプロジェクトに webtunnel を導入する」の手順
+
+#### Phase 2 実測（2026-08-11 / ubuntu-latest / Vite 8.2.1 / Node 22）
+
+| 項目 | 実測 |
+|---|---|
+| dispatch → セッション ready | 66 秒 |
+| `actions/setup-node`（Node 22） | 1 秒 |
+| `npm ci`（Vite のみ / 17 パッケージ） | 2 秒 |
+| Vite の起動（listen まで） | 0.23 秒 |
+| dev サーバの step 全体（setup + 起動 + ready 判定） | 4 秒 |
+| 録画 | 93.8 秒で 152KB（h264 1280x800 5fps） |
+
+- runner の Chromium は 1280x800 のウィンドウだが、ブラウザ UI を除いたビューポートは 1280x656 になる。録画（Xvfb の画面全体）は 1280x800、CDP のスクリーンショットは 1280x656
+- `npm ci` の結果はキャッシュしていない。依存の多いプロジェクトでは ready までが伸びる。必要になったら `actions/setup-node` の `cache: npm` を `working_directory` 込みで足す
+
+### Phase 3: 残り
+
+- 実アプリ repo への caller workflow 展開（trust credential の subject 確認と Secrets 登録が repo ごとに要る）
 - 録画 / スクリーンショットを PR コメントへ自動添付するフロー（gh-r2-image skill との接続）
 
 ## 未検証事項・リスク
