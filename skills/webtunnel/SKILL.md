@@ -81,6 +81,16 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 
 `--wait` は CDP がローカルから応答するまで待つ。特定ブランチのコードで動かす `--ref`、最初に開く URL を指定する `--start-url` などのオプションは `local/webtunnel` の冒頭コメントを参照する（`WEBTUNNEL_REPO` を省略すると webtunnel リポジトリ自身が対象になる）。`--start-url` / `--no-record` は caller workflow が `start_url` / `record` input を宣言している場合だけ渡せる（宣言の無い input を送ると dispatch 自体が拒否される。PROJECT.md の caller 例は宣言済み）。
 
+#### ログインが必要なページを扱う
+
+対応方法は次の優先順位で選ぶ（各方式の設計・secret の作り方は PROJECT.md「ログイン済み状態でのセッション開始」が SSOT）:
+
+1. **サービス側の dev 限定の工夫（secret 不要）**: dev 環境の匿名認証・自動ログイン・dev DB にしか存在しないテストアカウント等で、ログインの壁自体を無くす
+2. **ローカルからの storage state 注入**: セッション ready 後に `agent-browser --state` で認証済み状態を持ち込む（Actions に secret を置かない）
+3. **secret `WEBTUNNEL_AUTH_ENV` + caller repo の `.webtunnel/setup.sh`**: セッション開始時に runner 上で自動ログインする
+
+1 の工夫をアプリ側に実装する時は、**dev 限定の仕掛けを本番に漏らさない**: 環境変数・ビルドフラグで dev 環境だけ有効にし、本番ビルド・本番 DB には入れない。public repo ではその工夫のコード自体も公開されるため、知られても無害な設計（dev 環境にしか存在しないアカウント等）にする。3 の secret には本番・個人アカウントの資格情報を入れない（録画 artifact は公開される）。
+
 ### Phase 3: 操作する
 
 ```bash
