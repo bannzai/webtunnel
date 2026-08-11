@@ -53,7 +53,7 @@ escape_workflow_command_data() {
 # 復号した値を add-mask に登録し、環境変数として export する。
 # add-mask はジョブ全体に効くため、以降の step（keepalive の chrome.log 出力等）でも伏字になる。
 load_auth_env() {
-  local decoded key value
+  local decoded line key value
   if ! decoded="$(printf '%s' "$WEBTUNNEL_AUTH_ENV" | base64 -d 2>/dev/null)"; then
     warn "secret \`WEBTUNNEL_AUTH_ENV\` を base64 として復号できなかった。認証情報を渡さずにセットアップを続行する。"
     return 0
@@ -61,6 +61,8 @@ load_auth_env() {
 
   local -a names=()
   while IFS= read -r line || [ -n "$line" ]; do
+    # Windows で作った KEY=VALUE 列は行末に CR が残り、値の一部として export されてしまう
+    line="${line%$'\r'}"
     [ -n "$line" ] || continue
     case "$line" in \#*) continue ;; esac
     # `=` が無い行では ${line%%=*} も ${line#*=} も行全体を返し、KEY=KEY として通ってしまう
@@ -78,7 +80,10 @@ load_auth_env() {
     if [[ "$value" =~ ^\"(.*)\"$ || "$value" =~ ^\'(.*)\'$ ]]; then
       value="${BASH_REMATCH[1]}"
     fi
-    echo "::add-mask::$(escape_workflow_command_data "$value")"
+    # 空値の add-mask は runner が警告を出すだけなので登録しない（export はする）
+    if [ -n "$value" ]; then
+      echo "::add-mask::$(escape_workflow_command_data "$value")"
+    fi
     export "$key=$value"
     names+=("$key")
   done < <(printf '%s\n' "$decoded")
