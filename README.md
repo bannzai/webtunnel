@@ -11,7 +11,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 ## 使い方
 
 ```bash
-# セッション起動（CDP が応答するまで待つ）
+# セッション起動（サンプルアプリ webProject が開いた状態で ready になる）
 local/webtunnel up dev --wait
 
 # 接続情報（tailscale IP ベースの CDP URL）を表示
@@ -19,7 +19,7 @@ local/webtunnel cdp dev
 
 # agent-browser で操作（--session は作業スペース名にする）
 agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
-  --cdp http://<tailscale IP>:9222 open https://example.com
+  --cdp http://<tailscale IP>:9222 snapshot
 
 # スクリーンショット
 local/webtunnel screenshot dev ./tmp/check.png
@@ -30,9 +30,11 @@ local/webtunnel down dev
 
 CDP は Host ヘッダの制約で MagicDNS 名では接続できないため、接続は tailscale IP で行う（詳細と設計全体は PROJECT.md 参照）。
 
+自分のプロジェクトを runner 上で起動して確認する手順は PROJECT.md「新しいプロジェクトに webtunnel を導入する」を参照。
+
 ## Status
 
-Phase 1（疎通）実装済み。設計の SSOT は PROJECT.md。
+Phase 1（疎通）・Phase 2（dev サーバ起動と各アプリ repo への導入手順）実装済み。設計の SSOT は PROJECT.md。
 
 ## 経緯
 
