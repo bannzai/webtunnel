@@ -38,22 +38,37 @@ assert_loopback_only() {
   }
 }
 
+# 冪等にはしない（起動前に応答がある = このポートを別プロセスが握っている）。
+# runner は毎回クリーンな VM のため、dev サーバ起動前の応答は想定外。
+# ここで成功扱いにすると Chromium が無関係なサービスを開き、DEV_PID も引き継がれず
+# 監視されないまま ready になってしまう（PR #10 のレビュー指摘）。
 if responding; then
-  assert_loopback_only
-  echo "${READY_URL} はすでに応答している（冪等: 何もしない）"
-  exit 0
+  echo "起動前に ${READY_URL} が応答している。ポート ${PORT} を別プロセスが握っている" >&2
+  exit 1
 fi
 
 cd "${ROOT}/${WORKING_DIRECTORY}"
 export PORT
-# id-token: write の job では全 step に OIDC トークン発行用の env が注入される。
-# caller のコマンド（依存パッケージの install script を含む）に Tailscale の
-# trust credential を使える token の発行能力を渡さない
-unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN
+
+# caller のコマンド（依存パッケージの install script を含む）に、この job が持つ
+# OIDC トークン発行能力（id-token: write）を渡さないためのハードニング。
+#   - ACTIONS_ID_TOKEN_REQUEST_*: 現ステップでの発行に直接使う 2 変数を消す
+#   - GITHUB_ENV / GITHUB_PATH / GITHUB_OUTPUT / GITHUB_STATE: caller が後続ステップへ
+#     BASH_ENV 等を注入して発行能力を得る経路を塞ぐため、子プロセスごとに使い捨てファイルへ向ける
+# 完全な隔離ではない（同一 VM・sudo NOPASSWD のため。PROJECT.md「リポジトリ公開に耐える安全性」の残存リスク参照）
+DECOY_DIR="$WORK/caller-github-files"
+mkdir -p "$DECOY_DIR"
+# caller のコマンドを、OIDC 発行能力を外し GitHub の永続化ファイルをデコイに向けた env で走らせる
+caller_env=(env
+  -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  GITHUB_ENV="$DECOY_DIR/env"
+  GITHUB_PATH="$DECOY_DIR/path"
+  GITHUB_OUTPUT="$DECOY_DIR/output"
+  GITHUB_STATE="$DECOY_DIR/state")
 
 if [ -n "$SETUP_COMMAND" ]; then
   echo "setup: ${SETUP_COMMAND}"
-  bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1 || {
+  "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1 || {
     echo "setup_command が失敗。ログ末尾:" >&2
     tail -n 100 "$SETUP_LOG" >&2
     exit 1
@@ -61,7 +76,7 @@ if [ -n "$SETUP_COMMAND" ]; then
 fi
 
 echo "start: ${START_COMMAND} (PORT=${PORT})"
-nohup bash -c "$START_COMMAND" >"$LOG" 2>&1 &
+nohup "${caller_env[@]}" bash -c "$START_COMMAND" >"$LOG" 2>&1 &
 DEV_PID=$!
 
 for _ in $(seq 1 90); do
