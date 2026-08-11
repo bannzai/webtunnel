@@ -113,28 +113,32 @@ class PreviewHandler(BaseHTTPRequestHandler):
             "-c:v", "mjpeg", "-q:v", str(settings["quality"]), "-pix_fmt", "yuvj420p",
             "-f", "mpjpeg", "-",
         ]
-        # ffmpeg の起動自体が失敗しても finally でスロットを返す（返さないと preview が死んだままになる）
-        process = None
+        # スロットの解放は取得と対で外側の finally が担う。起動失敗・切断のどの経路でも返す
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-            self.send_response(200)
-            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=ffmpeg")
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            while True:
-                chunk = process.stdout.read(8192)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
-        except OSError as error:
-            self.send_error(500, "cannot start ffmpeg")
-            print(f"ffmpeg を起動できない: {error}", flush=True)
-        finally:
-            if process is not None:
+            try:
+                process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+            except OSError as error:
+                # まだ何も応答していないため 500 を返せる
+                self.send_error(500, "cannot start ffmpeg")
+                print(f"ffmpeg を起動できない: {error}", flush=True)
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=ffmpeg")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                while True:
+                    chunk = process.stdout.read(8192)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+            except OSError:
+                # 200 送信後の失敗はクライアント切断（BrokenPipe 等）。応答は書き換えず後始末だけ行う
+                pass
+            finally:
                 process.kill()
                 process.wait()
+        finally:
             stream_slots.release()
 
     def log_message(self, fmt, *args):
