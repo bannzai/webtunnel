@@ -12,8 +12,14 @@ set -euo pipefail
 
 SKILLS_DIR=$(cd "$(dirname "$0")" && pwd -P)
 TARGET_HOME="${SKILL_INSTALL_HOME:-$HOME}"
-# Claude Code は ~/.claude/skills、Codex CLI は ~/.agents/skills を読む（~/.codex/skills は Codex の従来パス）
-ROOTS=".claude/skills .agents/skills .codex/skills"
+
+# Claude Code は ~/.claude/skills、Codex CLI は ~/.agents/skills と $CODEX_HOME/skills
+# （CODEX_HOME 未設定時は ~/.codex/skills）を読む
+skill_roots() {
+  echo "${TARGET_HOME}/.claude/skills"
+  echo "${TARGET_HOME}/.agents/skills"
+  echo "${CODEX_HOME:-${TARGET_HOME}/.codex}/skills"
+}
 
 ERRORS=0
 
@@ -27,9 +33,8 @@ install_one() {
     return
   fi
 
-  local root dir link
-  for root in $ROOTS; do
-    dir="${TARGET_HOME}/${root}"
+  local dir link
+  while IFS= read -r dir; do
     if [ ! -d "$dir" ]; then
       echo "skip ${dir}（ディレクトリが無い）"
       continue
@@ -53,7 +58,7 @@ install_one() {
 
     ln -s "$src" "$link"
     echo "link ${link} -> ${src}"
-  done
+  done < <(skill_roots)
 }
 
 main() {

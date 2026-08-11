@@ -13,6 +13,8 @@ set -euo pipefail
 
 REPO="${WEBTUNNEL_REPO:-bannzai/webtunnel}"
 WORKFLOW="${WEBTUNNEL_WORKFLOW:-browser-session.yml}"
+# artifact の retention は 7 日（session.yml の retention-days）。その期間内の run を十分カバーする件数
+RUN_SEARCH_LIMIT=100
 
 if [ $# -lt 1 ] || [ $# -gt 2 ]; then
   echo "Usage: fetch-recording.sh <session> [出力ディレクトリ]" >&2
@@ -25,12 +27,12 @@ for required in gh jq; do
   command -v "$required" >/dev/null 2>&1 || { echo "${required} が必要" >&2; exit 1; }
 done
 
-runs_json=$(gh run list -R "$REPO" --workflow "$WORKFLOW" -L 30 --json databaseId,displayTitle,status)
+runs_json=$(gh run list -R "$REPO" --workflow "$WORKFLOW" -L "$RUN_SEARCH_LIMIT" --json databaseId,displayTitle,status)
 run=$(echo "$runs_json" | jq -c --arg session "$SESSION" \
   '[.[] | select(.displayTitle | startswith("session=" + $session + " "))] | first')
 
 if [ -z "$run" ] || [ "$run" = "null" ]; then
-  echo "セッション ${SESSION} の run が ${REPO} の ${WORKFLOW} に見つからない" >&2
+  echo "セッション ${SESSION} の run が ${REPO} の ${WORKFLOW} の直近 ${RUN_SEARCH_LIMIT} 件に見つからない" >&2
   exit 1
 fi
 

@@ -104,6 +104,12 @@ on:
       duration_minutes:
         required: true
         default: "60"
+      start_url:
+        required: false
+        default: "about:blank"
+      record:
+        required: false
+        default: "true"
 jobs:
   session:
     permissions:
@@ -113,6 +119,8 @@ jobs:
     with:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
+      start_url: ${{ inputs.start_url }}
+      record: ${{ inputs.record }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}

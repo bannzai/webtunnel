@@ -25,7 +25,12 @@ assert() {
 FAKE_HOME="${TMP}/home"
 mkdir -p "${FAKE_HOME}/.claude/skills" "${FAKE_HOME}/.agents/skills"
 
-out=$(SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" webtunnel 2>&1)
+# 実行環境の CODEX_HOME に影響されないよう、テストでは明示的に未設定にして呼ぶ
+run_install() {
+  env -u CODEX_HOME SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" "$@"
+}
+
+out=$(run_install webtunnel 2>&1)
 code=$?
 assert "設置は exit 0" "0" "$code"
 assert "Claude Code の skill ディレクトリへ symlink を張る" \
@@ -37,26 +42,35 @@ assert "symlink 経由で SKILL.md を読める" \
 assert "存在しない設置先はスキップする" \
   "skipped" "$(echo "$out" | grep -q 'skip .*\.codex/skills' && echo skipped || echo not-skipped)"
 
-out=$(SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" webtunnel 2>&1)
+out=$(run_install webtunnel 2>&1)
 code=$?
 assert "再実行しても exit 0（冪等）" "0" "$code"
 assert "再実行時は設置済みと報告する" \
   "reported" "$(echo "$out" | grep -q '設置済み' && echo reported || echo not-reported)"
 
-out=$(SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" 2>&1)
+out=$(run_install 2>&1)
 code=$?
 assert "skill 名を省略すると skills/ 配下をすべて設置する" "0" "$code"
+
+# CODEX_HOME が設定されている環境では ~/.codex ではなくそちらへ設置する
+CODEX_FAKE="${TMP}/codex-home"
+mkdir -p "${CODEX_FAKE}/skills"
+out=$(env CODEX_HOME="$CODEX_FAKE" SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" webtunnel 2>&1)
+code=$?
+assert "CODEX_HOME 設定時も exit 0" "0" "$code"
+assert "CODEX_HOME/skills へ symlink を張る" \
+  "${SKILLS_DIR}/webtunnel" "$(readlink "${CODEX_FAKE}/skills/webtunnel")"
 
 # 既存の実体がある場合は上書きしない
 CONFLICT_HOME="${TMP}/conflict-home"
 mkdir -p "${CONFLICT_HOME}/.claude/skills/webtunnel"
 echo "既存" > "${CONFLICT_HOME}/.claude/skills/webtunnel/SKILL.md"
-out=$(SKILL_INSTALL_HOME="$CONFLICT_HOME" bash "$SCRIPT" webtunnel 2>&1)
+out=$(env -u CODEX_HOME SKILL_INSTALL_HOME="$CONFLICT_HOME" bash "$SCRIPT" webtunnel 2>&1)
 code=$?
 assert "実体が存在する場合は exit 1" "1" "$code"
 assert "衝突した実体を上書きしない" "既存" "$(cat "${CONFLICT_HOME}/.claude/skills/webtunnel/SKILL.md")"
 
-out=$(SKILL_INSTALL_HOME="$FAKE_HOME" bash "$SCRIPT" not-exist-skill 2>&1)
+out=$(run_install not-exist-skill 2>&1)
 code=$?
 assert "存在しない skill 名は exit 1" "1" "$code"
 
