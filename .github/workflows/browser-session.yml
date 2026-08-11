@@ -1,0 +1,44 @@
+# Chromium セッションを張る workflow（webtunnel 自身用の workflow_dispatch ラッパー）。
+# 実体は session.yml（reusable workflow）。他リポジトリからの利用は PROJECT.md「各アプリ repo での実行」参照。
+# 起動例:
+#   gh workflow run browser-session.yml -f session=dev -f duration_minutes=60
+# 停止:
+#   gh run cancel <run-id> -R bannzai/webtunnel
+name: browser-session
+run-name: "session=${{ inputs.session }} duration=${{ inputs.duration_minutes }}m"
+
+on:
+  workflow_dispatch:
+    inputs:
+      session:
+        description: "セッション名。tailnet ホスト名 webtunnel-<session> になる（小文字英数字とハイフンのみ）"
+        required: true
+        default: dev
+      duration_minutes:
+        description: "セッション維持時間（分）"
+        required: true
+        default: "60"
+      start_url:
+        description: "Chromium 起動時に開く URL"
+        required: false
+        default: "about:blank"
+      record:
+        description: "セッション画面を録画して artifact に残す"
+        required: false
+        default: "true"
+
+jobs:
+  session:
+    # id-token: write が必要なのは reusable workflow を呼ぶこの job だけのため、job 単位で最小権限にする
+    permissions:
+      id-token: write # Tailscale の OIDC (workload identity federation) 認証に必要
+      contents: read
+    uses: ./.github/workflows/session.yml
+    with:
+      session: ${{ inputs.session }}
+      duration_minutes: ${{ inputs.duration_minutes }}
+      start_url: ${{ inputs.start_url }}
+      record: ${{ inputs.record }}
+    secrets:
+      TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+      TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}

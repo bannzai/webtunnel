@@ -1,0 +1,144 @@
+# Chromium + CDP セッションを張る reusable workflow。
+# 他リポジトリからの呼び方（caller workflow の例）は PROJECT.md「各アプリ repo での実行」参照。
+# webtunnel 自身は browser-session.yml（workflow_dispatch ラッパー）経由で呼ぶ。
+name: session
+
+on:
+  workflow_call:
+    inputs:
+      session:
+        description: "セッション名。tailnet ホスト名 webtunnel-<session> になる（小文字英数字とハイフンのみ）"
+        type: string
+        required: true
+      duration_minutes:
+        description: "セッション維持時間（分）"
+        type: string
+        required: false
+        default: "60"
+      start_url:
+        description: "Chromium 起動時に開く URL"
+        type: string
+        required: false
+        default: "about:blank"
+      record:
+        description: "セッション画面を録画して artifact に残す"
+        type: string
+        required: false
+        default: "true"
+    secrets:
+      TS_OIDC_CLIENT_ID:
+        required: true
+      TS_OIDC_AUDIENCE:
+        required: true
+
+env:
+  # CDP の待ち受けポート。local/webtunnel CLI・bridge・keepalive すべてこの値を前提にする
+  CDP_PORT: "9222"
+
+jobs:
+  session:
+    runs-on: ubuntu-latest
+    # 各 step が個別に時間制限を持つため、これは暴走時の最終防衛線
+    timeout-minutes: 360
+    # caller が付与した権限を必要最小限まで絞る（Tailscale の OIDC 認証に id-token: write が必要）
+    permissions:
+      id-token: write
+      contents: read
+    # 同名セッションの同時起動を防ぐ（tailnet ホスト名の衝突防止）。
+    # グループは caller リポジトリ単位のため、repo を跨いだ同名セッションは防げない
+    # （参照: PROJECT.md「未検証事項・リスク」）
+    concurrency:
+      group: browser-session-${{ inputs.session }}
+      cancel-in-progress: false
+    steps:
+      - name: 入力を検証
+        env:
+          SESSION: ${{ inputs.session }}
+          JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          [[ "$SESSION" =~ ^[a-z0-9-]+$ ]] || {
+            echo "session は小文字英数字とハイフンのみ許可: $SESSION" >&2
+            exit 1
+          }
+          # 空だと webtunnel の checkout がデフォルトブランチに落ちて workflow と scripts の版がずれる
+          [ -n "$JOB_WORKFLOW_SHA" ] || {
+            echo "job.workflow_sha が空。runner スクリプトの版を固定できないため中断" >&2
+            exit 1
+          }
+
+      # タグは可変で差し替えられうるため commit SHA で固定する（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
+      # checkout 後に git 認証は使わないため token を .git/config に残さない
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      # runner スクリプトは caller リポジトリには無いため、この workflow ファイルと同一 repo・同一 commit を取得する
+      # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）
+      - name: webtunnel（runner スクリプト）を checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: webtunnel
+          persist-credentials: false
+
+      - name: Chromium を起動
+        timeout-minutes: 10
+        env:
+          START_URL: ${{ inputs.start_url }}
+        run: ./webtunnel/runner/start-chromium.sh
+
+      - name: 録画を開始
+        if: inputs.record == 'true'
+        timeout-minutes: 5
+        run: ./webtunnel/runner/start-recording.sh
+
+      # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
+      # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
+      - name: Tailscale に参加
+        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        with:
+          oauth-client-id: ${{ secrets.TS_OIDC_CLIENT_ID }}
+          audience: ${{ secrets.TS_OIDC_AUDIENCE }}
+          tags: tag:ci
+          hostname: webtunnel-${{ inputs.session }}
+
+      - name: tailnet へブリッジ
+        timeout-minutes: 10
+        run: ./webtunnel/runner/bridge.sh "$CDP_PORT"
+
+      - name: セッション情報を出力
+        env:
+          SESSION: ${{ inputs.session }}
+        run: |
+          TS_IP="$(tailscale ip -4 | head -1)"
+          {
+            echo "## WebTunnel session ready"
+            echo ""
+            echo "- hostname: \`webtunnel-${SESSION}\`"
+            echo "- tailscale IP: \`${TS_IP}\`"
+            echo "- CDP: \`http://${TS_IP}:${CDP_PORT}\`（Host ヘッダ制約のため MagicDNS 名ではなく IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
+            echo "- agent-browser: \`agent-browser --cdp http://${TS_IP}:${CDP_PORT} open <url>\`"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: セッションを維持
+        env:
+          DURATION: ${{ inputs.duration_minutes }}
+        run: ./webtunnel/runner/keepalive.sh "$DURATION" "$CDP_PORT"
+
+      # down（gh run cancel）でも録画を artifact に残すため always() にする。
+      # cancel 後も always() の step は猶予時間内で実行される
+      - name: 録画を停止
+        if: always() && inputs.record == 'true'
+        timeout-minutes: 5
+        run: ./webtunnel/runner/stop-recording.sh
+
+      - name: 録画を artifact にアップロード
+        if: always() && inputs.record == 'true'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: recording-${{ inputs.session }}
+          path: ${{ runner.temp }}/webtunnel-recording.mp4
+          if-no-files-found: warn
+          retention-days: 7
