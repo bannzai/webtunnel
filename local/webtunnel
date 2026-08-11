@@ -82,11 +82,12 @@ cmd_up() {
   fi
 }
 
-# CDP が応答するまで待つ（最大 10 分。Linux runner はセットアップが軽く数分で ready になる）
+# CDP が応答するまで待つ。Linux runner は数分で ready になるが、上限は workflow 側の step 制限
+# （Chromium 起動 10 分 + セッション初期化 15 分 + tailnet 参加・bridge）に合わせて余裕を取る
 cmd_wait() {
   local session=$1
   echo "webtunnel-${session} の準備完了を待機中..."
-  for _ in $(seq 1 60); do
+  for _ in $(seq 1 180); do
     local ip
     ip=$(session_ip "$session")
     if [ -n "$ip" ] && curl -s -m 5 "http://${ip}:${CDP_PORT}/json/version" >/dev/null 2>&1; then
@@ -95,7 +96,7 @@ cmd_wait() {
     fi
     sleep 10
   done
-  echo "10 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
+  echo "30 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
   return 1
 }
 

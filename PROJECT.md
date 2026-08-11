@@ -136,6 +136,11 @@ on:
       duration_minutes:
         required: true
         default: "60"
+      # 宣言していない input は dispatch 自体が拒否されるため、
+      # local/webtunnel の --setup-script を使うなら caller 側にも入れる
+      setup_script:
+        required: false
+        default: ".webtunnel/setup.sh"
 jobs:
   session:
     permissions:
@@ -145,6 +150,7 @@ jobs:
     with:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
+      setup_script: ${{ inputs.setup_script }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}

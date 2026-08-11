@@ -98,8 +98,10 @@ jobs:
 
       # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
       # 入れ替えると認証情報が artifact に残りうる（参照: PROJECT.md「ログイン済み状態でのセッション開始」）
+      # timeout-minutes はスクリプト内のタイムアウト（既定 180 + 480 秒）より長くする。
+      # step が先に殺されると以降の step が飛び、「セットアップが失敗してもセッションは開く」が崩れる
       - name: セッションを初期化
-        timeout-minutes: 10
+        timeout-minutes: 15
         env:
           SETUP_SCRIPT: ${{ inputs.setup_script }}
           WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
