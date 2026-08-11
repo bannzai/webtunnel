@@ -302,6 +302,20 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 - 自己検証用のサンプル Web アプリ（`webProject/`）と `browser-session.yml` の `sample_app` input
 - 「新しいプロジェクトに webtunnel を導入する」の手順
 
+#### Phase 2 実測（2026-08-11 / ubuntu-latest / Vite 8.2.1 / Node 22）
+
+| 項目 | 実測 |
+|---|---|
+| dispatch → セッション ready | 66 秒 |
+| `actions/setup-node`（Node 22） | 1 秒 |
+| `npm ci`（Vite のみ / 17 パッケージ） | 2 秒 |
+| Vite の起動（listen まで） | 0.23 秒 |
+| dev サーバの step 全体（setup + 起動 + ready 判定） | 4 秒 |
+| 録画 | 93.8 秒で 152KB（h264 1280x800 5fps） |
+
+- runner の Chromium は 1280x800 のウィンドウだが、ブラウザ UI を除いたビューポートは 1280x656 になる。録画（Xvfb の画面全体）は 1280x800、CDP のスクリーンショットは 1280x656
+- `npm ci` の結果はキャッシュしていない。依存の多いプロジェクトでは ready までが伸びる。必要になったら `actions/setup-node` の `cache: npm` を `working_directory` 込みで足す
+
 ### Phase 3: 残り
 
 - 実アプリ repo への caller workflow 展開（trust credential の subject 確認と Secrets 登録が repo ごとに要る）
