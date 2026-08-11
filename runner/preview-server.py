@@ -36,7 +36,8 @@ PAGE = """<!doctype html>
 <title>webtunnel preview</title>
 <style>
   body {{ margin: 0; background: #1b1b1f; color: #e6e6e6; font: 14px system-ui, sans-serif; }}
-  header {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; padding: 10px 14px; }}
+  header, form {{ display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }}
+  header {{ padding: 10px 14px; }}
   label {{ display: flex; gap: 4px; align-items: center; }}
   input {{ width: 5em; }}
   img {{ display: block; width: 100%; max-width: {width}px; margin: 0 auto; background: #000; }}

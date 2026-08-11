@@ -8,15 +8,16 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 ## 前提
 - public リポジトリで運用する（Linux Runner 無料）。tailnet 内の実 IP 等の環境固有情報を書かない（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
 - Tailscale への認証は OIDC（workload identity federation）。GitHub Secrets は `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`（識別子であり長期シークレットではない。simtunnel と同一の値）
-- CDP は無認証のため、到達経路は tailnet 内に限定する。公開トンネル（cloudflared / ngrok 等）へ変更する場合は PROJECT.md「リポジトリ公開に耐える安全性」の再検討とセットで行う
+- CDP と preview は無認証のため、到達経路は tailnet 内に限定する。公開トンネル（cloudflared / ngrok 等）へ変更する場合は PROJECT.md「リポジトリ公開に耐える安全性」の再検討とセットで行う
 - workflow のトリガーは `workflow_dispatch` のみとする（fork PR に Secrets を渡さないため）
 - CDP への接続は MagicDNS 名ではなく tailscale IP で行う（参照: PROJECT.md「CDP の Host ヘッダ制約」）
 
 ## セッション操作
-- `local/webtunnel` CLI を使う: `up <session> [--wait]` / `down <session>` / `list` / `status <session>` / `cdp <session>` / `screenshot <session>`（オプションはスクリプト冒頭の使い方を参照）
+- `local/webtunnel` CLI を使う: `up <session> [--wait]` / `down <session>` / `list` / `status <session>` / `cdp <session>` / `preview <session>` / `screenshot <session>`（オプションはスクリプト冒頭の使い方を参照）
 - 放置しても `duration_minutes`（既定 60 分）で自動終了する
 
 ## 検証
 - セッション疎通: `local/webtunnel status <session>` が HTTP 200 を返すこと
 - 操作: `agent-browser --cdp http://<tailscale IP>:9222` で open / screenshot が動くこと（`--session` は作業スペース名にする）
+- preview: `local/webtunnel preview <session>` で開いた画面に CDP 操作がライブ映像として反映されること
 - 録画: セッション終了後に artifact `recording-<session>` から mp4 が取得できること
