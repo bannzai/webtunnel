@@ -30,6 +30,10 @@ on:
         description: "ログイン等のセットアップスクリプトのパス（存在しなければスキップ）"
         required: false
         default: ".webtunnel/setup.sh"
+      preview:
+        description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
+        required: false
+        default: "true"
 
 jobs:
   session:
@@ -44,6 +48,7 @@ jobs:
       start_url: ${{ inputs.start_url }}
       record: ${{ inputs.record }}
       setup_script: ${{ inputs.setup_script }}
+      preview: ${{ inputs.preview }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}

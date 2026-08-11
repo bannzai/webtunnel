@@ -6,6 +6,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 
 - ローカルマシンのリソースを消費せずに、ブラウザでの動作確認を GHA runner 上で行う
 - agent-browser の CDP 接続（`--cdp`）で、tailnet 越しに runner 上の Chromium を操作する
+- セッション中の画面をリアルタイムに見る（preview）
 - 動作確認の過程（録画）を artifact として PR に残す
 
 ## 使い方
@@ -16,6 +17,9 @@ local/webtunnel up dev --wait
 
 # 接続情報（tailscale IP ベースの CDP URL）を表示
 local/webtunnel cdp dev
+
+# セッション画面のライブ映像をブラウザで開く
+local/webtunnel preview dev
 
 # agent-browser で操作（--session は作業スペース名にする）
 agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
@@ -31,6 +35,16 @@ local/webtunnel down dev
 ログインが必要なページを触る場合は、caller repo に `.webtunnel/setup.sh` を置く（`--setup-script` でパス変更可）。Chromium 起動後・録画開始前に実行されるため、ログイン操作は録画に写らない。資格情報は secret `WEBTUNNEL_AUTH_ENV`（`KEY=VALUE` を base64 で単一行にしたもの）で渡す。サンプルは `examples/auth-demo/`、設計は PROJECT.md「ログイン済み状態でのセッション開始」を参照。
 
 CDP は Host ヘッダの制約で MagicDNS 名では接続できないため、接続は tailscale IP で行う（詳細と設計全体は PROJECT.md 参照）。
+
+## AI エージェントから使う（skill）
+
+`skills/webtunnel/` に Claude Code / Codex CLI 用の skill を同梱している。次のコマンドでグローバルの skill ディレクトリ（`~/.claude/skills` / `~/.agents/skills` / `~/.codex/skills` のうち存在するもの）へ symlink を張ると `/webtunnel` で使える。
+
+```bash
+skills/install.sh
+```
+
+symlink の向き先は実行したチェックアウトになるため、常設で使う場合は worktree ではなくメインのチェックアウトから実行する。冪等なので再実行しても安全（既に別の実体がある場合は上書きせずエラーになる）。
 
 ## Status
 

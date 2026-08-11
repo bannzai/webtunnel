@@ -30,6 +30,11 @@ on:
         type: string
         required: false
         default: ".webtunnel/setup.sh"
+      preview:
+        description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
+        type: string
+        required: false
+        default: "true"
     secrets:
       TS_OIDC_CLIENT_ID:
         required: true
@@ -42,6 +47,8 @@ on:
 env:
   # CDP の待ち受けポート。local/webtunnel CLI・bridge・keepalive すべてこの値を前提にする
   CDP_PORT: "9222"
+  # preview（MJPEG）の待ち受けポート。local/webtunnel preview もこの値を前提にする
+  PREVIEW_PORT: "9100"
 
 jobs:
   session:
@@ -114,6 +121,11 @@ jobs:
         timeout-minutes: 5
         run: ./webtunnel/runner/start-recording.sh
 
+      - name: preview を開始
+        if: inputs.preview == 'true'
+        timeout-minutes: 5
+        run: ./webtunnel/runner/start-preview.sh
+
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
       - name: Tailscale に参加
@@ -126,11 +138,17 @@ jobs:
 
       - name: tailnet へブリッジ
         timeout-minutes: 10
-        run: ./webtunnel/runner/bridge.sh "$CDP_PORT"
+        env:
+          PREVIEW: ${{ inputs.preview }}
+        run: |
+          PORTS=("$CDP_PORT")
+          if [ "$PREVIEW" = "true" ]; then PORTS+=("$PREVIEW_PORT"); fi
+          ./webtunnel/runner/bridge.sh "${PORTS[@]}"
 
       - name: セッション情報を出力
         env:
           SESSION: ${{ inputs.session }}
+          PREVIEW: ${{ inputs.preview }}
         run: |
           TS_IP="$(tailscale ip -4 | head -1)"
           {
@@ -140,6 +158,9 @@ jobs:
             echo "- tailscale IP: \`${TS_IP}\`"
             echo "- CDP: \`http://${TS_IP}:${CDP_PORT}\`（Host ヘッダ制約のため MagicDNS 名ではなく IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
             echo "- agent-browser: \`agent-browser --cdp http://${TS_IP}:${CDP_PORT} open <url>\`"
+            if [ "$PREVIEW" = "true" ]; then
+              echo "- preview: \`http://${TS_IP}:${PREVIEW_PORT}\`（\`webtunnel preview ${SESSION}\` で開く）"
+            fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: セッションを維持
