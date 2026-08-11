@@ -77,7 +77,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 | `node_version` | `actions/setup-node` で用意する Node のバージョン。空なら runner のプリインストール版 |
 
 - **ポートは `PORT` 環境変数として両コマンドへ渡す**。`port` input を SSOT にして、コマンド文字列側にポート番号を重複させない。Next.js / Nuxt / CRA は `PORT` をそのまま解釈し、Vite は `vite.config.js` で `process.env.PORT` を読む
-- **ready 判定は `http://127.0.0.1:<port><ready_path>` への到達**とし、HTTP ステータスは問わない（応答がある = listen している）。dev サーバのプロセスが死んだら待たずに即失敗させ、ログ末尾を step の出力に出す
+- **ready 判定は `http://127.0.0.1:<port><ready_path>` への到達**とし、HTTP ステータスは問わない（応答がある = listen している）。dev サーバのプロセスが死んだら待たずに即失敗させ、ログ末尾を step の出力に出す。ready 後もプロセス ID を keepalive に引き継いで監視し、死んだらセッションを終了する（動作確認の対象が消えたセッションを維持しない）
 - **ツールチェーン準備は session.yml 側**に持つ。reusable workflow の呼び出しは job 単位で、caller は job の中に step を差し込めないため。Node 以外（Python / Ruby / Go 等）は ubuntu-latest のプリインストール版を `setup_command` から使う
 - **ビルド成果物を artifact 経由で受け取る経路（simtunnel の `app_artifact` 相当）は作らない**。simtunnel でこれが要るのは、macOS runner が高価でビルドを別 job に切り出す動機があり、かつ Flutter 等が `xcodebuild` 直叩きで表現できないため。Web は `setup_command` に任意のシェルコマンドを書けて Linux runner も安価なため、同一 job でビルドすれば足りる。必要になったら caller 側の build job + `download-artifact` を足す
 - `start_url` を省略した時は `http://localhost:<port>/` を開く。dev サーバを起動しない場合だけ `about:blank` になる

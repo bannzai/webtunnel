@@ -67,6 +67,8 @@ DEV_PID=$!
 for _ in $(seq 1 90); do
   if responding; then
     assert_loopback_only
+    # ready 後にプロセスが死んだらセッションを終了させるため keepalive.sh へ引き継ぐ
+    [ -z "${GITHUB_ENV:-}" ] || echo "WEBTUNNEL_DEV_PID=${DEV_PID}" >> "$GITHUB_ENV"
     echo "ready: ${READY_URL}"
     exit 0
   fi
