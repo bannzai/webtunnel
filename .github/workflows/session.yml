@@ -16,10 +16,40 @@ on:
         required: false
         default: "60"
       start_url:
-        description: "Chromium 起動時に開く URL"
+        description: "Chromium 起動時に開く URL。空なら dev サーバの URL（起動しない場合は about:blank）"
         type: string
         required: false
-        default: "about:blank"
+        default: ""
+      setup_command:
+        description: "dev サーバ起動前に working_directory で実行するコマンド（例: npm ci）。空ならスキップ"
+        type: string
+        required: false
+        default: ""
+      start_command:
+        description: "dev サーバを起動するコマンド（例: npm run dev）。空なら dev サーバを起動しない"
+        type: string
+        required: false
+        default: ""
+      working_directory:
+        description: "setup_command / start_command を実行する caller リポジトリルート相対のディレクトリ"
+        type: string
+        required: false
+        default: "."
+      port:
+        description: "dev サーバが listen するポート。PORT 環境変数として両コマンドに渡り、ready 判定にも使う"
+        type: string
+        required: false
+        default: "5173"
+      ready_path:
+        description: "dev サーバの ready 判定に使うパス"
+        type: string
+        required: false
+        default: "/"
+      node_version:
+        description: "actions/setup-node で用意する Node のバージョン。空なら runner のプリインストール版を使う"
+        type: string
+        required: false
+        default: ""
       record:
         description: "セッション画面を録画して artifact に残す"
         type: string
@@ -51,13 +81,21 @@ jobs:
       group: browser-session-${{ inputs.session }}
       cancel-in-progress: false
     steps:
-      - name: 入力を検証
+      # 後続 step の START_URL は GITHUB_ENV 経由で渡す（start-chromium.sh が読む env 名）
+      - name: 入力を検証して開く URL を決める
         env:
           SESSION: ${{ inputs.session }}
           JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          START_URL: ${{ inputs.start_url }}
+          START_COMMAND: ${{ inputs.start_command }}
+          PORT: ${{ inputs.port }}
         run: |
           [[ "$SESSION" =~ ^[a-z0-9-]+$ ]] || {
             echo "session は小文字英数字とハイフンのみ許可: $SESSION" >&2
+            exit 1
+          }
+          [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || {
+            echo "port は 1〜65535 の整数: $PORT" >&2
             exit 1
           }
           # 空だと webtunnel の checkout がデフォルトブランチに落ちて workflow と scripts の版がずれる
@@ -65,6 +103,10 @@ jobs:
             echo "job.workflow_sha が空。runner スクリプトの版を固定できないため中断" >&2
             exit 1
           }
+          if [ -z "$START_URL" ] && [ -n "$START_COMMAND" ]; then
+            START_URL="http://localhost:${PORT}/"
+          fi
+          echo "START_URL=${START_URL:-about:blank}" >> "$GITHUB_ENV"
 
       # タグは可変で差し替えられうるため commit SHA で固定する（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
       # checkout 後に git 認証は使わないため token を .git/config に残さない
@@ -82,10 +124,28 @@ jobs:
           path: webtunnel
           persist-credentials: false
 
+      # reusable workflow の呼び出しは job 単位で caller が step を差し込めないため、
+      # dev サーバのツールチェーン準備はこの workflow 側で受け持つ（参照: PROJECT.md「dev サーバの起動」）
+      - name: Node をセットアップ
+        if: inputs.node_version != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      # Chromium より先に起動して、start_url でそのまま dev サーバを開けるようにする
+      - name: dev サーバを起動
+        if: inputs.start_command != ''
+        timeout-minutes: 15
+        env:
+          SETUP_COMMAND: ${{ inputs.setup_command }}
+          START_COMMAND: ${{ inputs.start_command }}
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          PORT: ${{ inputs.port }}
+          READY_PATH: ${{ inputs.ready_path }}
+        run: ./webtunnel/runner/start-dev-server.sh
+
       - name: Chromium を起動
         timeout-minutes: 10
-        env:
-          START_URL: ${{ inputs.start_url }}
         run: ./webtunnel/runner/start-chromium.sh
 
       - name: 録画を開始
@@ -119,6 +179,7 @@ jobs:
             echo "- tailscale IP: \`${TS_IP}\`"
             echo "- CDP: \`http://${TS_IP}:${CDP_PORT}\`（Host ヘッダ制約のため MagicDNS 名ではなく IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
             echo "- agent-browser: \`agent-browser --cdp http://${TS_IP}:${CDP_PORT} open <url>\`"
+            echo "- Chromium が開いた URL: \`${START_URL}\`"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: セッションを維持
@@ -140,5 +201,16 @@ jobs:
         with:
           name: recording-${{ inputs.session }}
           path: ${{ runner.temp }}/webtunnel-recording.mp4
+          if-no-files-found: warn
+          retention-days: 7
+
+      # dev サーバの起動失敗も、起動後のランタイムエラーも同じログで追えるようにする
+      - name: dev サーバのログを artifact にアップロード
+        if: always() && inputs.start_command != ''
+        timeout-minutes: 10
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dev-server-log-${{ inputs.session }}
+          path: ${{ runner.temp }}/webtunnel-dev-server*.log
           if-no-files-found: warn
           retention-days: 7

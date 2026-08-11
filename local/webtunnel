@@ -2,7 +2,7 @@
 # WebTunnel ローカル CLI。GHA 上の Chromium (CDP) セッションを管理する。
 #
 # 使い方:
-#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--wait]
+#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--no-sample-app] [--wait]
 #   webtunnel down <session>
 #   webtunnel list
 #   webtunnel status <session>
@@ -44,13 +44,14 @@ session_run_ids() {
 
 cmd_up() {
   local session=$1; shift
-  local duration=60 start_url="" ref="" record="" wait=0
+  local duration=60 start_url="" ref="" record="" sample_app="" wait=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --duration) duration=$2; shift 2 ;;
       --start-url) start_url=$2; shift 2 ;;
       --ref) ref=$2; shift 2 ;;
       --no-record) record="false"; shift ;;
+      --no-sample-app) sample_app="false"; shift ;;
       --wait) wait=1; shift ;;
       *) echo "不明なオプション: $1" >&2; exit 1 ;;
     esac
@@ -70,6 +71,7 @@ cmd_up() {
   local -a inputs=(-f session="$session" -f duration_minutes="$duration")
   if [ -n "$start_url" ]; then inputs+=(-f start_url="$start_url"); fi
   if [ -n "$record" ]; then inputs+=(-f record="$record"); fi
+  if [ -n "$sample_app" ]; then inputs+=(-f sample_app="$sample_app"); fi
   gh workflow run "$WORKFLOW" -R "$REPO" ${ref:+--ref "$ref"} "${inputs[@]}"
   echo "dispatched: session=${session} duration=${duration}分${ref:+ ref=${ref}}"
 

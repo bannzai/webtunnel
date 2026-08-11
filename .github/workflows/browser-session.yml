@@ -19,9 +19,13 @@ on:
         required: true
         default: "60"
       start_url:
-        description: "Chromium 起動時に開く URL"
+        description: "Chromium 起動時に開く URL。空ならサンプルアプリ（sample_app=false なら about:blank）"
         required: false
-        default: "about:blank"
+        default: ""
+      sample_app:
+        description: "リポジトリ内のサンプル Web アプリ (webProject) を dev サーバとして起動して開く"
+        required: false
+        default: "true"
       record:
         description: "セッション画面を録画して artifact に残す"
         required: false
@@ -38,6 +42,11 @@ jobs:
       session: ${{ inputs.session }}
       duration_minutes: ${{ inputs.duration_minutes }}
       start_url: ${{ inputs.start_url }}
+      setup_command: ${{ inputs.sample_app == 'true' && 'npm ci' || '' }}
+      start_command: ${{ inputs.sample_app == 'true' && 'npm run dev' || '' }}
+      working_directory: ${{ inputs.sample_app == 'true' && 'webProject' || '.' }}
+      # node_version を渡すのは、この workflow が dev サーバ用ツールチェーン準備の経路も兼ねて検証するため
+      node_version: ${{ inputs.sample_app == 'true' && '22' || '' }}
       record: ${{ inputs.record }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
