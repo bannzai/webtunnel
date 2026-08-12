@@ -16,10 +16,40 @@ on:
         required: false
         default: "60"
       start_url:
-        description: "Chromium 起動時に開く URL"
+        description: "Chromium 起動時に開く URL。空なら dev サーバの URL（起動しない場合は about:blank）"
         type: string
         required: false
-        default: "about:blank"
+        default: ""
+      setup_command:
+        description: "dev サーバ起動前に working_directory で実行するコマンド（例: npm ci）。空ならスキップ"
+        type: string
+        required: false
+        default: ""
+      start_command:
+        description: "dev サーバを起動するコマンド（例: npm run dev）。フォアグラウンドで動き続けるプロセスにする（デーモン化するとプロセス監視が起動失敗と誤認する）。空なら dev サーバを起動しない"
+        type: string
+        required: false
+        default: ""
+      working_directory:
+        description: "setup_command / start_command を実行する caller リポジトリルート相対のディレクトリ"
+        type: string
+        required: false
+        default: "."
+      port:
+        description: "dev サーバが listen するポート。PORT 環境変数として両コマンドに渡り、ready 判定にも使う"
+        type: string
+        required: false
+        default: "5173"
+      ready_path:
+        description: "dev サーバの ready 判定に使うパス"
+        type: string
+        required: false
+        default: "/"
+      node_version:
+        description: "actions/setup-node で用意する Node のバージョン。空なら runner のプリインストール版を使う"
+        type: string
+        required: false
+        default: ""
       record:
         description: "セッション画面を録画して artifact に残す"
         type: string
@@ -66,13 +96,27 @@ jobs:
       group: browser-session-${{ inputs.session }}
       cancel-in-progress: false
     steps:
-      - name: 入力を検証
+      # 後続 step の START_URL は GITHUB_ENV 経由で渡す（start-chromium.sh が読む env 名）
+      - name: 入力を検証して開く URL を決める
         env:
           SESSION: ${{ inputs.session }}
           JOB_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          START_URL: ${{ inputs.start_url }}
+          START_COMMAND: ${{ inputs.start_command }}
+          PORT: ${{ inputs.port }}
         run: |
           [[ "$SESSION" =~ ^[a-z0-9-]+$ ]] || {
             echo "session は小文字英数字とハイフンのみ許可: $SESSION" >&2
+            exit 1
+          }
+          [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || {
+            echo "port は 1〜65535 の整数: $PORT" >&2
+            exit 1
+          }
+          # CDP と同じポートだと start-chromium.sh の CDP 応答待ちが dev サーバの応答を CDP と誤認し、
+          # preview と同じポートだと start-preview.sh の冪等チェックが dev サーバを preview と誤認する
+          [ "$PORT" != "$CDP_PORT" ] && [ "$PORT" != "$PREVIEW_PORT" ] || {
+            echo "port は CDP (${CDP_PORT}) / preview (${PREVIEW_PORT}) のポートと別にする" >&2
             exit 1
           }
           # 空だと webtunnel の checkout がデフォルトブランチに落ちて workflow と scripts の版がずれる
@@ -80,6 +124,10 @@ jobs:
             echo "job.workflow_sha が空。runner スクリプトの版を固定できないため中断" >&2
             exit 1
           }
+          if [ -z "$START_URL" ] && [ -n "$START_COMMAND" ]; then
+            START_URL="http://localhost:${PORT}/"
+          fi
+          echo "START_URL=${START_URL:-about:blank}" >> "$GITHUB_ENV"
 
       # タグは可変で差し替えられうるため commit SHA で固定する（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
       # checkout 後に git 認証は使わないため token を .git/config に残さない
@@ -87,21 +135,49 @@ jobs:
         with:
           persist-credentials: false
 
+      # checkout はパス先の既存内容を消すため、万一 caller リポジトリが同名ディレクトリを持つ場合は
+      # 黙って上書きせず、ここで明確に失敗させる
+      - name: runner スクリプトの checkout 先が空いていることを確認
+        run: |
+          [ ! -e .webtunnel-runner ] || {
+            echo "caller リポジトリのルートに .webtunnel-runner が存在するため、runner スクリプトを配置できない" >&2
+            exit 1
+          }
+
       # runner スクリプトは caller リポジトリには無いため、この workflow ファイルと同一 repo・同一 commit を取得する
-      # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）
+      # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）。
+      # caller リポジトリのディレクトリと衝突しにくい dot 付きのパスに置く
       - name: webtunnel（runner スクリプト）を checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
-          path: webtunnel
+          path: .webtunnel-runner
           persist-credentials: false
+
+      # reusable workflow の呼び出しは job 単位で caller が step を差し込めないため、
+      # dev サーバのツールチェーン準備はこの workflow 側で受け持つ（参照: PROJECT.md「dev サーバの起動」）
+      - name: Node をセットアップ
+        if: inputs.node_version != ''
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      # Chromium より先に起動して、start_url でそのまま dev サーバを開けるようにする
+      - name: dev サーバを起動
+        if: inputs.start_command != ''
+        timeout-minutes: 15
+        env:
+          SETUP_COMMAND: ${{ inputs.setup_command }}
+          START_COMMAND: ${{ inputs.start_command }}
+          WORKING_DIRECTORY: ${{ inputs.working_directory }}
+          PORT: ${{ inputs.port }}
+          READY_PATH: ${{ inputs.ready_path }}
+        run: ./.webtunnel-runner/runner/start-dev-server.sh
 
       - name: Chromium を起動
         timeout-minutes: 10
-        env:
-          START_URL: ${{ inputs.start_url }}
-        run: ./webtunnel/runner/start-chromium.sh
+        run: ./.webtunnel-runner/runner/start-chromium.sh
 
       # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
       # 入れ替えると認証情報が artifact に残りうる（参照: PROJECT.md「ログイン済み状態でのセッション開始」）
@@ -112,19 +188,19 @@ jobs:
         env:
           SETUP_SCRIPT: ${{ inputs.setup_script }}
           WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
-        run: ./webtunnel/runner/run-auth-setup.sh
+        run: ./.webtunnel-runner/runner/run-auth-setup.sh
 
       # WEBTUNNEL_SKIP_RECORDING はセットアップ失敗時に画面を初期化できなかった場合に
       # run-auth-setup.sh が立てる（認証情報が画面に残ったまま録画するのを防ぐ）
       - name: 録画を開始
         if: inputs.record == 'true' && env.WEBTUNNEL_SKIP_RECORDING != 'true'
         timeout-minutes: 5
-        run: ./webtunnel/runner/start-recording.sh
+        run: ./.webtunnel-runner/runner/start-recording.sh
 
       - name: preview を開始
         if: inputs.preview == 'true'
         timeout-minutes: 5
-        run: ./webtunnel/runner/start-preview.sh
+        run: ./.webtunnel-runner/runner/start-preview.sh
 
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
@@ -143,7 +219,7 @@ jobs:
         run: |
           PORTS=("$CDP_PORT")
           if [ "$PREVIEW" = "true" ]; then PORTS+=("$PREVIEW_PORT"); fi
-          ./webtunnel/runner/bridge.sh "${PORTS[@]}"
+          ./.webtunnel-runner/runner/bridge.sh "${PORTS[@]}"
 
       - name: セッション情報を出力
         env:
@@ -158,6 +234,7 @@ jobs:
             echo "- tailscale IP: \`${TS_IP}\`"
             echo "- CDP: \`http://${TS_IP}:${CDP_PORT}\`（Host ヘッダ制約のため MagicDNS 名ではなく IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
             echo "- agent-browser: \`agent-browser --cdp http://${TS_IP}:${CDP_PORT} open <url>\`"
+            echo "- Chromium が開いた URL: \`${START_URL}\`"
             if [ "$PREVIEW" = "true" ]; then
               echo "- preview: \`http://${TS_IP}:${PREVIEW_PORT}\`（\`webtunnel preview ${SESSION}\` で開く）"
             fi
@@ -166,14 +243,14 @@ jobs:
       - name: セッションを維持
         env:
           DURATION: ${{ inputs.duration_minutes }}
-        run: ./webtunnel/runner/keepalive.sh "$DURATION" "$CDP_PORT"
+        run: ./.webtunnel-runner/runner/keepalive.sh "$DURATION" "$CDP_PORT"
 
       # down（gh run cancel）でも録画を artifact に残すため always() にする。
       # cancel 後も always() の step は猶予時間内で実行される
       - name: 録画を停止
         if: always() && inputs.record == 'true'
         timeout-minutes: 5
-        run: ./webtunnel/runner/stop-recording.sh
+        run: ./.webtunnel-runner/runner/stop-recording.sh
 
       - name: 録画を artifact にアップロード
         if: always() && inputs.record == 'true'
@@ -182,5 +259,16 @@ jobs:
         with:
           name: recording-${{ inputs.session }}
           path: ${{ runner.temp }}/webtunnel-recording.mp4
+          if-no-files-found: warn
+          retention-days: 7
+
+      # dev サーバの起動失敗も、起動後のランタイムエラーも同じログで追えるようにする
+      - name: dev サーバのログを artifact にアップロード
+        if: always() && inputs.start_command != ''
+        timeout-minutes: 10
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dev-server-log-${{ inputs.session }}
+          path: ${{ runner.temp }}/webtunnel-dev-server*.log
           if-no-files-found: warn
           retention-days: 7

@@ -16,9 +16,11 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 ## セッション操作
 - `local/webtunnel` CLI を使う: `up <session> [--wait]` / `down <session>` / `list` / `status <session>` / `cdp <session>` / `preview <session>` / `screenshot <session>`（オプションはスクリプト冒頭の使い方を参照）
 - 放置しても `duration_minutes`（既定 60 分）で自動終了する
+- 動作確認の対象は runner 上で起動する dev サーバ。何をどう起動するかは caller workflow の input で渡す（参照: PROJECT.md「dev サーバの起動」）
 
 ## 検証
 - セッション疎通: `local/webtunnel status <session>` が HTTP 200 を返すこと
 - 操作: `agent-browser --cdp http://<tailscale IP>:9222` で open / screenshot が動くこと（`--session` は作業スペース名にする）
 - preview: `local/webtunnel preview <session>` で開いた画面に CDP 操作がライブ映像として反映されること
 - 録画: セッション終了後に artifact `recording-<session>` から mp4 が取得できること
+- dev サーバ: `up <session> --wait` だけでサンプルアプリ（`webProject/`）が開き、agent-browser でボタンをクリックすると表示が変わること
