@@ -81,6 +81,25 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 
 `--wait` は CDP がローカルから応答するまで待つ。特定ブランチのコードで動かす `--ref`、最初に開く URL を指定する `--start-url` などのオプションは `local/webtunnel` の冒頭コメントを参照する（`WEBTUNNEL_REPO` を省略すると webtunnel リポジトリ自身が対象になる）。`--start-url` / `--no-record` は caller workflow が `start_url` / `record` input を宣言している場合だけ渡せる（宣言の無い input を送ると dispatch 自体が拒否される。PROJECT.md の caller 例は宣言済み）。
 
+#### ログインが必要なページを扱う
+
+対応方法は次の優先順位で選ぶ:
+
+1. **サービス側の dev 限定の工夫（secret 不要）**: dev 環境の匿名認証・自動ログイン・dev DB にしか存在しないテストアカウント等で、ログインの壁自体を無くす
+2. **ローカルからの storage state 注入（Actions に secret を置かない）**: セッション ready 後に `agent-browser --cdp http://<tailscale IP>:9222 --state <state.json> open <url>` で、ローカルで一度ログインして保存した認証済み状態をリモートの Chromium に持ち込む（`--cdp` を付けないとローカルのブラウザに注入してしまう）
+3. **secret `WEBTUNNEL_AUTH_ENV` + セットアップスクリプト**: セッション開始時に runner 上で自動ログインする。前の 2 つが使えない場合（変えられない外部サービス、ログインフロー自体の検証）の汎用経路。設計・secret の作り方・スクリプトの置き場所は PROJECT.md「ログイン済み状態でのセッション開始」を参照する
+
+バックエンド構成ごとの目安:
+
+- **認証ビルトインの BaaS（Firebase / Supabase 等）**: dev プロジェクトを分離し、匿名認証か seed 済みテストユーザーで 1 に倒す。webtunnel の都合で本番プロジェクトの匿名認証を新たに有効化しない（API キーは公開情報のため、作り捨てアカウントで無料枠・コストを悪用される面が開く。有効化は App Check / CAPTCHA・レート制限・匿名アカウントの定期削除とセットで判断する）
+- **認証をアプリ層で自作している構成（Turso / SQLite / PostgreSQL 等の DB 単体）**: dev サーバを runner 上で起動し（`setup_command` / `start_command`。PROJECT.md「dev サーバの起動」参照）、ローカル DB ファイルや seed 済み dev DB で完結させる。DB 接続情報が要る場合だけ dev 専用の値を 3 の secret で渡す（`WEBTUNNEL_AUTH_ENV` はログイン資格情報に限らず、セットアップに必要な秘匿値全般を運ぶ封筒として使える）
+
+どの方式でも守ること:
+
+- **dev 限定の仕掛けを本番に漏らさない**: 自動ログイン・テストアカウントは環境変数・ビルドフラグで dev 環境だけ有効にし、本番ビルド・本番 DB には入れない。アプリ側 repo が public ならその工夫のコード自体も公開されるため、知られても無害な設計（dev 環境にしか存在しないアカウント等）にする
+- 本番の全権キー（service_role・本番 DB トークン等）や本番・個人アカウントの資格情報を、webtunnel の経路（secret・セットアップスクリプト・録画に写る画面）に載せない
+- **録画 artifact は公開ダウンロードされる前提で `--no-record` を判断する**: セッション中に手動でログイン操作を行う場合（ログインフロー自体の検証、storage state 注入後の再ログイン等）は入力中の画面が録画に写るため `up <session> --no-record` を必須にする。セットアップスクリプト経由のログインは録画開始前に終わるが、ログイン後の画面に公開できない内容が出るなら同じく `--no-record` にする（PROJECT.md「リポジトリ公開に耐える安全性」の「録画 artifact は公開される前提で使う」参照）
+
 ### Phase 3: 操作する
 
 ```bash
