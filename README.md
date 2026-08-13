@@ -32,6 +32,8 @@ local/webtunnel screenshot dev ./tmp/check.png
 local/webtunnel down dev
 ```
 
+ログインが必要なページを触る場合は、caller repo に `.webtunnel/setup.sh` を置く（`--setup-script` でパス変更可）。Chromium 起動後・録画開始前に実行されるため、ログイン操作は録画に写らない。資格情報は secret `WEBTUNNEL_AUTH_ENV`（`KEY=VALUE` を base64 で単一行にしたもの）で渡す。サンプルは `examples/auth-demo/`、設計は PROJECT.md「ログイン済み状態でのセッション開始」を参照。
+
 CDP は Host ヘッダの制約で MagicDNS 名では接続できないため、接続は tailscale IP で行う（詳細と設計全体は PROJECT.md 参照）。
 
 自分のプロジェクトを runner 上で起動して確認する手順は PROJECT.md「新しいプロジェクトに webtunnel を導入する」を参照。

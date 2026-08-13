@@ -55,6 +55,11 @@ on:
         type: string
         required: false
         default: "true"
+      setup_script:
+        description: "ログイン等のセットアップスクリプト（caller repo 基準のパス。存在しなければスキップ）"
+        type: string
+        required: false
+        default: ".webtunnel/setup.sh"
       preview:
         description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
         type: string
@@ -65,12 +70,17 @@ on:
         required: true
       TS_OIDC_AUDIENCE:
         required: true
+      WEBTUNNEL_AUTH_ENV:
+        description: "setup_script へ渡す KEY=VALUE 列を base64 で単一行にしたもの（PROJECT.md「ログイン済み状態でのセッション開始」参照）"
+        required: false
 
 env:
   # CDP の待ち受けポート。local/webtunnel CLI・bridge・keepalive すべてこの値を前提にする
   CDP_PORT: "9222"
   # preview（MJPEG）の待ち受けポート。local/webtunnel preview もこの値を前提にする
   PREVIEW_PORT: "9100"
+  # secrets コンテキストは step の if で直接参照できないため、有無だけを env に写して判定に使う
+  WEBTUNNEL_HAS_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV != '' }}
 
 jobs:
   session:
@@ -131,8 +141,8 @@ jobs:
       # 黙って上書きせず、ここで明確に失敗させる
       - name: runner スクリプトの checkout 先が空いていることを確認
         run: |
-          [ ! -e .webtunnel ] || {
-            echo "caller リポジトリのルートに .webtunnel が存在するため、runner スクリプトを配置できない" >&2
+          [ ! -e .webtunnel-runner ] || {
+            echo "caller リポジトリのルートに .webtunnel-runner が存在するため、runner スクリプトを配置できない" >&2
             exit 1
           }
 
@@ -144,7 +154,7 @@ jobs:
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
-          path: .webtunnel
+          path: .webtunnel-runner
           persist-credentials: false
 
       # reusable workflow の呼び出しは job 単位で caller が step を差し込めないため、
@@ -165,21 +175,32 @@ jobs:
           WORKING_DIRECTORY: ${{ inputs.working_directory }}
           PORT: ${{ inputs.port }}
           READY_PATH: ${{ inputs.ready_path }}
-        run: ./.webtunnel/runner/start-dev-server.sh
+        run: ./.webtunnel-runner/runner/start-dev-server.sh
 
       - name: Chromium を起動
         timeout-minutes: 10
-        run: ./.webtunnel/runner/start-chromium.sh
+        run: ./.webtunnel-runner/runner/start-chromium.sh
+
+      # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
+      # 入れ替えると認証情報が artifact に残りうる（参照: PROJECT.md「ログイン済み状態でのセッション開始」）
+      # timeout-minutes はスクリプト内のタイムアウト（既定 180 + 480 秒）より長くする。
+      # step が先に殺されると以降の step が飛び、「セットアップが失敗してもセッションは開く」が崩れる
+      - name: セッションを初期化
+        timeout-minutes: 15
+        env:
+          SETUP_SCRIPT: ${{ inputs.setup_script }}
+          WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
+        run: ./.webtunnel-runner/runner/run-auth-setup.sh
 
       - name: 録画を開始
         if: inputs.record == 'true'
         timeout-minutes: 5
-        run: ./.webtunnel/runner/start-recording.sh
+        run: ./.webtunnel-runner/runner/start-recording.sh
 
       - name: preview を開始
         if: inputs.preview == 'true'
         timeout-minutes: 5
-        run: ./.webtunnel/runner/start-preview.sh
+        run: ./.webtunnel-runner/runner/start-preview.sh
 
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
@@ -198,7 +219,7 @@ jobs:
         run: |
           PORTS=("$CDP_PORT")
           if [ "$PREVIEW" = "true" ]; then PORTS+=("$PREVIEW_PORT"); fi
-          ./.webtunnel/runner/bridge.sh "${PORTS[@]}"
+          ./.webtunnel-runner/runner/bridge.sh "${PORTS[@]}"
 
       - name: セッション情報を出力
         env:
@@ -222,14 +243,14 @@ jobs:
       - name: セッションを維持
         env:
           DURATION: ${{ inputs.duration_minutes }}
-        run: ./.webtunnel/runner/keepalive.sh "$DURATION" "$CDP_PORT"
+        run: ./.webtunnel-runner/runner/keepalive.sh "$DURATION" "$CDP_PORT"
 
       # down（gh run cancel）でも録画を artifact に残すため always() にする。
       # cancel 後も always() の step は猶予時間内で実行される
       - name: 録画を停止
         if: always() && inputs.record == 'true'
         timeout-minutes: 5
-        run: ./.webtunnel/runner/stop-recording.sh
+        run: ./.webtunnel-runner/runner/stop-recording.sh
 
       - name: 録画を artifact にアップロード
         if: always() && inputs.record == 'true'
@@ -241,9 +262,13 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      # dev サーバの起動失敗も、起動後のランタイムエラーも同じログで追えるようにする
+      # dev サーバの起動失敗も、起動後のランタイムエラーも同じログで追えるようにする。
+      # ただし認証情報を渡したセッションではアップロードしない。dev サーバがリクエスト内容や
+      # 認証診断をログへ書くと復号済みの資格情報がファイルに残りうるが、add-mask は Actions ログの
+      # 表示にしか効かず artifact のファイル内容は伏字にならない。ログが要るデバッグは
+      # secret を外した構成で再現する
       - name: dev サーバのログを artifact にアップロード
-        if: always() && inputs.start_command != ''
+        if: always() && inputs.start_command != '' && env.WEBTUNNEL_HAS_AUTH_ENV != 'true'
         timeout-minutes: 10
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:

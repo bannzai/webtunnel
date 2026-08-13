@@ -42,6 +42,14 @@ done
 echo "DISPLAY=$DISPLAY_NUM" >> "$GITHUB_ENV"
 echo "WEBTUNNEL_WINDOW_SIZE=${WINDOW_SIZE/,/x}" >> "$GITHUB_ENV"
 
+# ログイン後に出る「パスワードを保存しますか?」バブルはユーザー名を平文で表示し、
+# 閉じるまで画面に残るため録画に写り込む（参照: PROJECT.md「ログイン済み状態でのセッション開始」）。
+# 抑止する switch は無いのでプロファイルの設定として無効化する
+mkdir -p "$WORK/chrome-profile/Default"
+cat > "$WORK/chrome-profile/Default/Preferences" <<'JSON'
+{"credentials_enable_service":false,"profile":{"password_manager_enabled":false,"password_manager_leak_detection":false}}
+JSON
+
 # --no-sandbox: 使い捨て VM 上の動作確認用ブラウザのため sandbox 無効化のリスクを許容し、
 #               runner のカーネル設定（unprivileged userns 制限）由来の起動失敗を避ける
 # --remote-allow-origins=*: ローカルの DevTools フロントエンド等、Origin 付き WebSocket 接続を許可する

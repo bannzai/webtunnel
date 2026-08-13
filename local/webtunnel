@@ -2,7 +2,7 @@
 # WebTunnel ローカル CLI。GHA 上の Chromium (CDP) セッションを管理する。
 #
 # 使い方:
-#   webtunnel up <session> [--duration 60] [--start-url <url>] [--ref <branch>] [--no-record] [--no-preview] [--no-sample-app] [--wait]
+#   webtunnel up <session> [--duration 60] [--start-url <url>] [--setup-script <path>] [--ref <branch>] [--no-record] [--no-preview] [--no-sample-app] [--wait]
 #   webtunnel down <session>
 #   webtunnel list
 #   webtunnel status <session>
@@ -46,11 +46,12 @@ session_run_ids() {
 
 cmd_up() {
   local session=$1; shift
-  local duration=60 start_url="" ref="" record="" preview="" sample_app="" wait=0
+  local duration=60 start_url="" setup_script="" ref="" record="" preview="" sample_app="" wait=0
   while [ $# -gt 0 ]; do
     case "$1" in
       --duration) duration=$2; shift 2 ;;
       --start-url) start_url=$2; shift 2 ;;
+      --setup-script) setup_script=$2; shift 2 ;;
       --ref) ref=$2; shift 2 ;;
       --no-record) record="false"; shift ;;
       --no-preview) preview="false"; shift ;;
@@ -73,6 +74,7 @@ cmd_up() {
   # 空の任意 input は送らない（start_url 等を宣言しない薄い caller workflow に対応）
   local -a inputs=(-f session="$session" -f duration_minutes="$duration")
   if [ -n "$start_url" ]; then inputs+=(-f start_url="$start_url"); fi
+  if [ -n "$setup_script" ]; then inputs+=(-f setup_script="$setup_script"); fi
   if [ -n "$record" ]; then inputs+=(-f record="$record"); fi
   if [ -n "$preview" ]; then inputs+=(-f preview="$preview"); fi
   if [ -n "$sample_app" ]; then inputs+=(-f sample_app="$sample_app"); fi
@@ -86,11 +88,12 @@ cmd_up() {
   fi
 }
 
-# CDP が応答するまで待つ（既定 20 分。setup_command が重いプロジェクトは WEBTUNNEL_WAIT_MINUTES で延ばす）。
-# run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+# CDP が応答するまで待つ（既定 40 分 = dev サーバ起動 15 分 + Chromium 10 分 + セッション初期化 15 分
+# の step 上限を覆う。WEBTUNNEL_WAIT_MINUTES で変更可）。健全な run を待ち切れず失敗と誤報しないための
+# 上限で、run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 cmd_wait() {
   local session=$1
-  local minutes="${WEBTUNNEL_WAIT_MINUTES:-20}"
+  local minutes="${WEBTUNNEL_WAIT_MINUTES:-40}"
   echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
   local end=$(( $(date +%s) + minutes * 60 ))
   local checks=0

@@ -30,6 +30,10 @@ on:
         description: "セッション画面を録画して artifact に残す"
         required: false
         default: "true"
+      setup_script:
+        description: "ログイン等のセットアップスクリプトのパス（存在しなければスキップ）"
+        required: false
+        default: ".webtunnel/setup.sh"
       preview:
         description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
         required: false
@@ -52,7 +56,9 @@ jobs:
       # node_version を渡すのは、この workflow が dev サーバ用ツールチェーン準備の経路も兼ねて検証するため
       node_version: ${{ inputs.sample_app == 'true' && '22' || '' }}
       record: ${{ inputs.record }}
+      setup_script: ${{ inputs.setup_script }}
       preview: ${{ inputs.preview }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+      WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}

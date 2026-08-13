@@ -99,8 +99,8 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
 - **caller のコマンドに OIDC トークンの発行能力を渡さないハードニング**。`id-token: write` の job で `setup_command` が走らせる依存パッケージの install script が Tailscale の trust credential に使える token を発行するのを防ぐ。start-dev-server.sh は `ACTIONS_ID_TOKEN_REQUEST_*` を外し、`GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行する（完全な隔離ではない。「リポジトリ公開に耐える安全性」の残存リスク参照）
 - **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
-- **runner スクリプトの checkout は `.webtunnel`（dot 付き）に置く**。checkout はパス先の既存内容を消すため、caller リポジトリのルートに同名ディレクトリがあると壊してしまう。dot 付きにして衝突しにくくしたうえで、それでも存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
-- **`up --wait` の待機は既定 20 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 step の上限 15 分 + Chromium / Tailscale のセットアップを覆う。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+- **runner スクリプトの checkout は `.webtunnel-runner` に置く**。checkout はパス先の既存内容を消すため、caller リポジトリに実在しうる名前を避ける。`.webtunnel/` はログイン用セットアップスクリプト（`.webtunnel/setup.sh`。「ログイン済み状態でのセッション開始」参照）の置き場所として caller 側に予約するため checkout 先にしない。それでも `.webtunnel-runner` が存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
+- **`up --wait` の待機は既定 40 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 15 分 + Chromium 起動 10 分 + セッション初期化（ログイン）15 分の step 上限と Tailscale のセットアップを覆う。run が消えた場合は即終了するため、長い既定でも失敗検知は遅れない。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
@@ -109,6 +109,57 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - 動作確認で意味を持つ要素を 1 ページに置く: クリックで変わるカウンタ、フォーム入力、日本語テキスト（CJK フォント確認）、非同期に更新される要素（`public/items.json` の fetch と経過秒数）
 - runner の Chromium（1280x800 のウィンドウ = 高さ 650px 前後のビューポート）でスクロールせずに全要素が入るレイアウトにする。録画・スクリーンショットに全要素が写るため
 - 依存は Vite のみ。dev サーバ起動の input（`setup_command` = `npm ci` / `start_command` = `npm run dev` / `node_version`）を実際に通す検証対象を兼ねる
+
+### ログイン済み状態でのセッション開始
+
+多くのプロダクトは主要画面がログインの向こう側にあるため、ログイン不要な画面しか触れないとセッションの用途が限られる。simtunnel の「オンボーディング突破用 Maestro flow の自動実行」と同じ考え方で、**定型のログインを runner 側のセットアップスクリプトに任せ、セッションはログイン済みの状態から始める**。
+
+- **自動検出**: caller repo に `.webtunnel/setup.sh` があれば実行、なければスキップ。パスは `setup_script` input で差し替えられる（`local/webtunnel up <session> --setup-script <path>`）
+- **実行順序は dev サーバ・Chromium の起動後 → 録画開始前 → tailnet 参加前**。ログイン対象が runner 上の dev サーバでも到達でき、認証情報の露出を止める要（後述）になる順序であり、入れ替えてはいけない
+- **操作は agent-browser の CDP 接続**: 自前の CDP クライアントは作らない（「操作レイヤー」の判断をそのまま適用）。`run-auth-setup.sh` が runner に agent-browser を版指定で入れ、`WEBTUNNEL_CDP_URL`（`http://127.0.0.1:9222`）を環境変数で渡す。cwd は caller repo の workspace ルート
+- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りはプロセスグループごと行い、ハングした子プロセス（復号済みの資格情報を環境に持つ）を残さない。スクリプトが起動する常駐プロセス（dev サーバ等）は、スクリプト側で `setsid` によりグループから切り離して生かす（`examples/auth-demo/setup.sh` 参照）。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
+- **セットアップスクリプトも `start-dev-server.sh` と同じハードニングで実行する**: OIDC 発行能力（`ACTIONS_ID_TOKEN_REQUEST_*`）を外し、GitHub の永続化ファイル（`GITHUB_ENV` 等）をデコイに向けた env で走らせる（「リポジトリ公開に耐える安全性」の 11 参照）
+- 実装は `runner/run-auth-setup.sh`、サンプル兼検証用のセットアップスクリプトは `examples/auth-demo/`
+
+#### 認証情報の受け渡し
+
+認証情報は secret `WEBTUNNEL_AUTH_ENV` で渡す。**`KEY=VALUE` を並べたものを base64 で単一行にした値**を登録し、`run-auth-setup.sh` が復号してセットアップスクリプトの環境変数にする。
+
+```bash
+printf 'APP_LOGIN_EMAIL=dev@example.com\nAPP_LOGIN_PASSWORD=xxxx\n' | base64 |
+  gh secret set WEBTUNNEL_AUTH_ENV -R <owner>/<repo>
+```
+
+複数行の secret がログでどう伏字になるかに依存しない設計にするため、base64 で単一行に畳む。復号後の値は 1 つずつ `::add-mask::` に登録してから環境変数にするため、**セットアップスクリプトが誤って出力しても Actions ログでは伏字**になる。add-mask はジョブ全体に効くので、以降の step（`keepalive.sh` が出す chrome.log の末尾など）でも同じく伏字になる。
+
+値は最初の `=` から行末までを**生のまま**渡す。引用符・エスケープの構文は無いため、値を `"..."` で囲まない（囲むと引用符も値の一部になる）。環境変数は agent-browser のインストール後・セットアップスクリプトの直前に export し、npm の lifecycle スクリプト（サードパーティコード）には見せない（復号前の `WEBTUNNEL_AUTH_ENV` の生値も npm の環境から外す）。`GITHUB_*` / `PATH` 等の制御用変数名のキーは、スクリプトや後続コマンドの挙動を secret の値で乗っ取れてしまうため警告して無視する。
+
+#### 認証情報を Actions のログ・artifact に残さないための設計
+
+1. **渡してよいのは開発環境用アカウントの資格情報だけ**: 本番アカウント・個人アカウントの資格情報を `WEBTUNNEL_AUTH_ENV` に入れない。runner は使い捨てとはいえ、ログイン後の画面は録画に残る
+2. **ログイン操作は録画しない**: セットアップは録画開始前に走るため、入力中のフォーム（ユーザー名の表示・パスワードの打鍵）は録画に一切写らない。録画は「ログイン済みの画面」から始まる
+3. **セットアップ失敗時は about:blank に戻し、戻せなければセッションを中断する**: 失敗するとユーザー名が見えたままのフォームが画面に残り、録画・preview・CDP に写り込む。`run-auth-setup.sh` は失敗時に CDP を直接叩いて空タブ以外を全て閉じ、残数で検証してから録画開始へ進む。検証できない場合は step を失敗させ、tailnet 参加ごと止める
+4. **パスワード保存バブルを抑止する**: ログイン後に Chrome が出す「パスワードを保存しますか?」バブルはユーザー名を平文で表示し、閉じるまで画面に残る。録画開始前にログインを終えてもこのバブルは残り続けるため、実測で録画の全フレームに写り込んだ。`start-chromium.sh` がプロファイルの `credentials_enable_service` / `password_manager_enabled` を無効にして出さないようにする（抑止する起動 switch は無い）
+5. **ログの伏字は add-mask で担保する**: 上記のとおり復号した値を個別に登録する。セットアップスクリプト側でも `set -x` を使わない
+6. **artifact は録画だけ**: アップロードするのは `webtunnel-recording.mp4` のみで、セットアップの生成物（サーバのログ等）は artifact に含めない。dev サーバのログ artifact（`dev-server-log-<session>`）も、認証情報を渡したセッションではアップロードしない。dev サーバがリクエスト内容や認証診断をログへ書くと復号済みの資格情報がファイルに残りうるが、add-mask は Actions ログの表示にしか効かず artifact のファイル内容は伏字にならないため
+7. **tailnet 参加前に完了する**: ログインは tailnet に出る前に終わるため、認証のやり取りが tailnet 上を流れることもない
+
+なお、**認証情報を Actions へ一切渡さない経路**もある。セッションが ready になった後、ローカルの agent-browser で cookie / storage state を注入する方法で、runner 側の変更も secret の登録も要らない。ローカルで一度ログインして保存した状態をそのまま持ち込む用途に向く。
+
+```bash
+agent-browser --cdp http://<tailscale IP>:9222 --state ./tmp/state.json open http://localhost:3000
+```
+
+#### 対応方法の優先順位
+
+ログインが必要なページへの対応は、次の順で検討する:
+
+1. **サービス側の dev 限定の工夫（secret 不要）**: dev 環境の匿名認証・自動ログイン・dev DB にしか存在しないテストアカウント等で、ログインの壁自体を無くす。対象サービスを自分で変えられる場合の第一候補
+2. **ローカル注入（Actions に資格情報を置かない）**: 上記の storage state 注入。ローカルで一度ログインした状態を持ち込む
+3. **`WEBTUNNEL_AUTH_ENV` + セットアップスクリプト**: 前の2つが使えない場合（変えられない外部サービス、ログインフロー自体の検証）の汎用経路
+
+1 を作り込む時は **dev 限定の仕掛けを本番に漏らさない**。自動ログインやテストアカウントは環境変数・ビルドフラグで dev 環境だけ有効にし、本番ビルド・本番 DB には入れない。アプリ側リポジトリが public ならその工夫のコード自体も公開されるため、知られても無害な設計（dev 環境にしか存在しないアカウント等）にする。3 の secret に本番・個人アカウントの資格情報を入れないのと同じ理由で、録画 artifact は公開される前提で扱う（「リポジトリ公開に耐える安全性」参照）。
+
 
 ### 利用者向け skill はこのリポジトリに置き、symlink で設置する
 
@@ -133,6 +184,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 9. **runner スクリプトは workflow と同一 commit に固定**: reusable workflow（session.yml）は runner スクリプトを `job.workflow_repository` / `job.workflow_sha` で checkout する。caller が `uses:` を SHA 固定していれば、実行されるスクリプトも同じ SHA に固定される
 10. **録画 artifact は公開される前提で使う**: public リポジトリの artifact はリポジトリの read 権限で取得でき、public repo では GitHub にログインした誰でもダウンロードできる（保持 7 日）。preview・CDP は tailnet 内限定だが、同じ画面が録画にも映るため、セッション画面に映すのは公開されてよい内容に限る。ログイン等の秘匿情報を扱う確認は `up --no-record` で録画を無効にする
 11. **caller のコマンドへ OIDC 発行能力を渡さないハードリング（完全な隔離ではない）**: `session.yml` の job は Tailscale 認証に `id-token: write` を持つため、`setup_command` / `start_command`（依存パッケージの install script を含む）が OIDC トークンを発行できると、tag:ci の auth key を mint できてしまう。`start-dev-server.sh` は caller のコマンドを (a) `ACTIONS_ID_TOKEN_REQUEST_*` を外し、(b) `GITHUB_ENV` / `GITHUB_PATH` / `GITHUB_OUTPUT` / `GITHUB_STATE` を使い捨てファイルへ向けた env で実行し、現ステップでの発行と後続ステップへの環境注入（`BASH_ENV` 等）の両経路を塞ぐ。**ただし同一 VM・`sudo` NOPASSWD のため完全な隔離ではない**（悪意ある caller は別 step のプロセスを覗く等で回避しうる）。残存リスクを受け入れられるのは次の多層防御による: mint できるのは tag:ci の auth key のみ / tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。完全分離は別 job かコンテナ隔離が要るが、dev サーバは session job と同じ runner の localhost で動かす必要があり（tailnet に出さないため）今回は採らない
+12. **セッションに持ち込む認証情報を漏らさない**: base64 単一行の secret + `add-mask`、ログイン操作を録画開始前に済ませる順序、開発環境用アカウント限定の運用で担保する（「ログイン済み状態でのセッション開始」の「認証情報を Actions のログ・artifact に残さないための設計」）
 
 ### 各アプリ repo での実行（reusable workflow）
 
@@ -168,6 +220,9 @@ on:
       preview:
         required: false
         default: "true"
+      setup_script:
+        required: false
+        default: ".webtunnel/setup.sh"
 jobs:
   session:
     permissions:
@@ -180,6 +235,7 @@ jobs:
       start_url: ${{ inputs.start_url }}
       record: ${{ inputs.record }}
       preview: ${{ inputs.preview }}
+      setup_script: ${{ inputs.setup_script }}
       # 以下はアプリに合わせて固定値で書く（起動するのは常にこのプロジェクトのため）
       setup_command: npm ci
       start_command: npm run dev
@@ -188,6 +244,8 @@ jobs:
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+      # ログイン済み状態で始める場合のみ（.webtunnel/setup.sh を置いた repo）
+      WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
 ```
 
 ローカル CLI は `WEBTUNNEL_REPO` でアプリ repo に向ける（`WEBTUNNEL_WORKFLOW` は caller workflow のファイル名。既定 `browser-session.yml`）:
@@ -208,12 +266,17 @@ webtunnel/
 ├── runner/                           # GHA 側スクリプト
 │   ├── start-dev-server.sh           # caller repo の dev サーバ起動 + 応答待ち（ログは artifact）
 │   ├── start-chromium.sh             # Xvfb + headed Chromium 起動 + CDP 応答待ち
+│   ├── run-auth-setup.sh             # caller repo のセットアップスクリプト実行（ログイン済み状態を作る）
 │   ├── start-recording.sh            # ffmpeg x11grab で録画開始（fragmented MP4）
 │   ├── stop-recording.sh             # 録画を SIGINT で停止してファイナライズ
 │   ├── preview-server.py             # ライブ映像の MJPEG 配信（閲覧ページ + /stream.mjpeg）
 │   ├── start-preview.sh              # preview サーバ起動 + listen 待ち
 │   ├── bridge.sh                     # socat: tailscale IF → 各ポート（直接到達可能ならスキップ）
 │   └── keepalive.sh                  # duration_minutes までジョブを維持（CDP 死活監視付き）
+├── examples/
+│   └── auth-demo/                    # ログイン必須ページを立てて突破するサンプル兼検証用
+│       ├── server.py                 # cookie が無いと中身が見えないデモサーバ
+│       └── setup.sh                  # setup_script のサンプル（agent-browser でフォームログイン）
 ├── webProject/                       # 自己検証用のサンプル Web アプリ（Vite）
 ├── local/
 │   └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / preview / screenshot / wait
@@ -304,7 +367,7 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 ```text
 1. webtunnel up <session>
      └─ gh workflow run browser-session.yml -f session=<session>
-2. Runner: dev サーバ起動 → Xvfb + Chromium 起動（dev サーバの URL を開く）→ 録画開始 → preview 起動
+2. Runner: dev サーバ起動 → Xvfb + Chromium 起動（dev サーバの URL を開く）→ セットアップ（ログイン）→ 録画開始 → preview 起動
      → tailscale join (hostname=webtunnel-<session>) → socat bridge
 3. Local: webtunnel status <session>（= http://<tailscale IP>:9222/json/version）が 200 になったら ready
 4. agent-browser --cdp http://<tailscale IP>:9222 で操作。webtunnel preview <session> で画面を見る
@@ -320,6 +383,8 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 - preview: `local/webtunnel preview <session>` で開いたページにセッションの画面が表示され、CDP 操作がライブ映像に反映されること
 - 録画: セッション終了後、`gh run download <run-id> -R bannzai/webtunnel -n recording-<session>` で mp4 が取得でき再生できること
 - dev サーバ: `local/webtunnel up <session> --wait` だけでサンプルアプリ（webProject）が開いた状態になり、`agent-browser --cdp http://<IP>:9222 snapshot` にカウンタ・フォーム・非同期に読み込んだ一覧が日本語で出ること。ボタンをクリックするとカウンタの表示が変わること
+- ログイン済み状態: `--setup-script examples/auth-demo/setup.sh` で起動したセッションで、ローカルの agent-browser から `http://127.0.0.1:8123/` を開くとログインフォームではなく保護されたページが見えること
+- 認証情報の非露出: 同じ run の `gh run view <run-id> --log` と録画 artifact に、`WEBTUNNEL_AUTH_ENV` に入れたパスワードとログインフォームが現れないこと
 
 ## 実装フェーズ
 
@@ -369,6 +434,7 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 ### Phase 2: dev サーバ起動と各アプリ repo への導入手順
 
 - dev サーバ起動の input（`setup_command` / `start_command` / `working_directory` / `port` / `ready_path` / `node_version`）と `runner/start-dev-server.sh`
+- ログイン済み状態でのセッション開始（`setup_script` / `WEBTUNNEL_AUTH_ENV`）と `runner/run-auth-setup.sh`・`examples/auth-demo/`
 - 自己検証用のサンプル Web アプリ（`webProject/`）と `browser-session.yml` の `sample_app` input
 - 「新しいプロジェクトに webtunnel を導入する」の手順
 
