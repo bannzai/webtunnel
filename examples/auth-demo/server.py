@@ -41,9 +41,9 @@ PROTECTED_PAGE = """<!doctype html><html lang="ja"><head><meta charset="utf-8">
 class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, format, *args):
+    def log_message(self, message_format, *args):
         # リクエストラインだけを stderr に出す（POST の本文は記録しない）
-        sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
+        sys.stderr.write("%s - %s\n" % (self.address_string(), message_format % args))
 
     def _send(self, status, body, headers=()):
         payload = body.encode("utf-8")

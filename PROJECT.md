@@ -117,7 +117,8 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **自動検出**: caller repo に `.webtunnel/setup.sh` があれば実行、なければスキップ。パスは `setup_script` input で差し替えられる（`local/webtunnel up <session> --setup-script <path>`）
 - **実行順序は dev サーバ・Chromium の起動後 → 録画開始前 → tailnet 参加前**。ログイン対象が runner 上の dev サーバでも到達でき、認証情報の露出を止める要（後述）になる順序であり、入れ替えてはいけない
 - **操作は agent-browser の CDP 接続**: 自前の CDP クライアントは作らない（「操作レイヤー」の判断をそのまま適用）。`run-auth-setup.sh` が runner に agent-browser を版指定で入れ、`WEBTUNNEL_CDP_URL`（`http://127.0.0.1:9222`）を環境変数で渡す。cwd は caller repo の workspace ルート
-- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める
+- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りは `timeout --foreground` でスクリプト本体だけに信号を送り、スクリプトが起動した常駐プロセス（dev サーバ等）を道連れにしない。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
+- **セットアップスクリプトも `start-dev-server.sh` と同じハードニングで実行する**: OIDC 発行能力（`ACTIONS_ID_TOKEN_REQUEST_*`）を外し、GitHub の永続化ファイル（`GITHUB_ENV` 等）をデコイに向けた env で走らせる（「リポジトリ公開に耐える安全性」の 11 参照）
 - 実装は `runner/run-auth-setup.sh`、サンプル兼検証用のセットアップスクリプトは `examples/auth-demo/`
 
 #### 認証情報の受け渡し
@@ -131,16 +132,16 @@ printf 'APP_LOGIN_EMAIL=dev@example.com\nAPP_LOGIN_PASSWORD=xxxx\n' | base64 |
 
 複数行の secret がログでどう伏字になるかに依存しない設計にするため、base64 で単一行に畳む。復号後の値は 1 つずつ `::add-mask::` に登録してから環境変数にするため、**セットアップスクリプトが誤って出力しても Actions ログでは伏字**になる。add-mask はジョブ全体に効くので、以降の step（`keepalive.sh` が出す chrome.log の末尾など）でも同じく伏字になる。
 
-値は最初の `=` から行末までを**生のまま**渡す。引用符・エスケープの構文は無いため、値を `"..."` で囲まない（囲むと引用符も値の一部になる）。環境変数は agent-browser のインストール後・セットアップスクリプトの直前に export し、npm の lifecycle スクリプト（サードパーティコード）には見せない。
+値は最初の `=` から行末までを**生のまま**渡す。引用符・エスケープの構文は無いため、値を `"..."` で囲まない（囲むと引用符も値の一部になる）。環境変数は agent-browser のインストール後・セットアップスクリプトの直前に export し、npm の lifecycle スクリプト（サードパーティコード）には見せない（復号前の `WEBTUNNEL_AUTH_ENV` の生値も npm の環境から外す）。`GITHUB_*` / `PATH` 等の制御用変数名のキーは、スクリプトや後続コマンドの挙動を secret の値で乗っ取れてしまうため警告して無視する。
 
 #### 認証情報を Actions のログ・artifact に残さないための設計
 
 1. **渡してよいのは開発環境用アカウントの資格情報だけ**: 本番アカウント・個人アカウントの資格情報を `WEBTUNNEL_AUTH_ENV` に入れない。runner は使い捨てとはいえ、ログイン後の画面は録画に残る
 2. **ログイン操作は録画しない**: セットアップは録画開始前に走るため、入力中のフォーム（ユーザー名の表示・パスワードの打鍵）は録画に一切写らない。録画は「ログイン済みの画面」から始まる
-3. **セットアップ失敗時は about:blank に戻す**: 失敗するとユーザー名が見えたままのフォームが画面に残り、直後に始まる録画へ写り込む。`run-auth-setup.sh` は失敗時にブラウザを `about:blank` へ戻してから録画開始へ進む
+3. **セットアップ失敗時は about:blank に戻し、戻せなければセッションを中断する**: 失敗するとユーザー名が見えたままのフォームが画面に残り、録画・preview・CDP に写り込む。`run-auth-setup.sh` は失敗時に CDP を直接叩いて空タブ以外を全て閉じ、残数で検証してから録画開始へ進む。検証できない場合は step を失敗させ、tailnet 参加ごと止める
 4. **パスワード保存バブルを抑止する**: ログイン後に Chrome が出す「パスワードを保存しますか?」バブルはユーザー名を平文で表示し、閉じるまで画面に残る。録画開始前にログインを終えてもこのバブルは残り続けるため、実測で録画の全フレームに写り込んだ。`start-chromium.sh` がプロファイルの `credentials_enable_service` / `password_manager_enabled` を無効にして出さないようにする（抑止する起動 switch は無い）
 5. **ログの伏字は add-mask で担保する**: 上記のとおり復号した値を個別に登録する。セットアップスクリプト側でも `set -x` を使わない
-6. **artifact は録画だけ**: アップロードするのは `webtunnel-recording.mp4` のみで、セットアップの生成物（サーバのログ等）は artifact に含めない
+6. **artifact は録画だけ**: アップロードするのは `webtunnel-recording.mp4` のみで、セットアップの生成物（サーバのログ等）は artifact に含めない。dev サーバのログ artifact（`dev-server-log-<session>`）も、認証情報を渡したセッションではアップロードしない。dev サーバがリクエスト内容や認証診断をログへ書くと復号済みの資格情報がファイルに残りうるが、add-mask は Actions ログの表示にしか効かず artifact のファイル内容は伏字にならないため
 7. **tailnet 参加前に完了する**: ログインは tailnet に出る前に終わるため、認証のやり取りが tailnet 上を流れることもない
 
 なお、**認証情報を Actions へ一切渡さない経路**もある。セッションが ready になった後、ローカルの agent-browser で cookie / storage state を注入する方法で、runner 側の変更も secret の登録も要らない。ローカルで一度ログインして保存した状態をそのまま持ち込む用途に向く。

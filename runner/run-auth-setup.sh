@@ -6,6 +6,7 @@
 # 認証情報は secret WEBTUNNEL_AUTH_ENV（base64 の KEY=VALUE 列）で受け取り、
 # 復号した値を add-mask に登録してからスクリプトの環境変数として渡す。
 # セットアップの失敗ではセッションを潰さない（ローカルから手動ログインする余地を残す）。
+# 例外は失敗後に画面を about:blank へ戻せたと検証できない場合で、認証情報の露出を防ぐため中断する。
 # env: SETUP_SCRIPT / WEBTUNNEL_AUTH_ENV / CDP_PORT / AGENT_BROWSER_VERSION /
 #      INSTALL_TIMEOUT_SECONDS / SETUP_TIMEOUT_SECONDS
 set -euo pipefail
@@ -34,6 +35,19 @@ run_with_timeout() {
   local seconds=$1; shift
   if command -v timeout >/dev/null 2>&1; then
     timeout --kill-after 10 "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+
+# セットアップスクリプトの打ち切り用。既定の timeout はプロセスグループごと殺すため、
+# スクリプトが起動した常駐プロセス（dev サーバ等）まで道連れになり、
+# 「失敗してもセッションは開く」時に手動ログインする相手が消えてしまう。
+# --foreground は COMMAND だけに信号を送り、子孫は生かす（GNU timeout の仕様）
+run_with_timeout_foreground() {
+  local seconds=$1; shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout --foreground --kill-after 10 "$seconds" "$@"
   else
     "$@"
   fi
@@ -77,6 +91,13 @@ load_auth_env() {
       warn "secret \`WEBTUNNEL_AUTH_ENV\` に \`KEY=VALUE\` 形式でない行がある。その行を無視する。"
       continue
     fi
+    # GITHUB_ENV / PATH 等の制御用変数を secret の値で上書きされると、このスクリプトや
+    # 後続コマンドの挙動（GitHub の永続化ファイルの行き先・コマンド解決）を乗っ取れてしまう
+    case "$key" in
+      GITHUB_*|RUNNER_*|ACTIONS_*|CI|PATH|HOME|SHELL|BASH_ENV|ENV|LD_*)
+        warn "secret \`WEBTUNNEL_AUTH_ENV\` の \`${key}\` は GitHub Actions・シェルの制御用変数名のため無視する。"
+        continue ;;
+    esac
     # 最初の `=` 以降は引用符も含めて生の値として扱う（引用符・エスケープの構文は提供しない。
     # 「気を利かせて」剥がすと、引用符で始まり引用符で終わる正規のパスワードを壊す）
     # 空値の add-mask は runner が警告を出すだけなので登録しない（export はする）
@@ -115,7 +136,8 @@ fi
 if ! command -v agent-browser >/dev/null 2>&1; then
   # --cdp は起動済みの Chromium に接続するため、Playwright のブラウザバイナリは要らない
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-  if run_with_timeout "$INSTALL_TIMEOUT_SECONDS" npm install -g "agent-browser@${AGENT_BROWSER_VERSION}" --no-fund --no-audit --loglevel=error; then
+  # 復号前の secret も npm の lifecycle スクリプト（サードパーティコード）に見せない
+  if run_with_timeout "$INSTALL_TIMEOUT_SECONDS" env -u WEBTUNNEL_AUTH_ENV npm install -g "agent-browser@${AGENT_BROWSER_VERSION}" --no-fund --no-audit --loglevel=error; then
     echo "agent-browser: $(agent-browser --version)"
   else
     warn "agent-browser のインストールに失敗した（${INSTALL_TIMEOUT_SECONDS} 秒でタイムアウトした可能性あり）。\`${SETUP_SCRIPT}\` を agent-browser 無しで実行する。"
@@ -131,10 +153,22 @@ export WEBTUNNEL_CDP_URL="http://127.0.0.1:${CDP_PORT}"
 # （~/.claude/rules/agent-browser-session-naming.md と同じ方針）
 export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-webtunnel-runner}"
 
+# セットアップスクリプトに、この job が持つ OIDC トークン発行能力（id-token: write）と
+# GitHub の永続化ファイルを渡さない（start-dev-server.sh の caller コマンドと同じハードニング。
+# PROJECT.md「リポジトリ公開に耐える安全性」参照）
+DECOY_DIR="${RUNNER_TEMP:-$(pwd)/tmp}/auth-setup-github-files"
+mkdir -p "$DECOY_DIR"
+caller_env=(env
+  -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  GITHUB_ENV="$DECOY_DIR/env"
+  GITHUB_PATH="$DECOY_DIR/path"
+  GITHUB_OUTPUT="$DECOY_DIR/output"
+  GITHUB_STATE="$DECOY_DIR/state")
+
 # ハングしたスクリプトを step の timeout-minutes に殺させない。step ごと落ちると
 # 録画・tailnet 参加・keepalive まで飛ばされ、「失敗してもセッションは開く」が成立しなくなる
 set +e
-run_with_timeout "$SETUP_TIMEOUT_SECONDS" bash "$SETUP_SCRIPT"
+run_with_timeout_foreground "$SETUP_TIMEOUT_SECONDS" "${caller_env[@]}" bash "$SETUP_SCRIPT"
 SETUP_STATUS=$?
 set -e
 
@@ -161,16 +195,15 @@ blank_browser() {
   [ "$remaining" = "0" ]
 }
 
-if blank_browser; then
-  BLANK_NOTE="画面は about:blank に戻した"
-else
-  # 画面に認証情報が残っていない保証が取れないため、録画 step 自体を止める
-  echo "WEBTUNNEL_SKIP_RECORDING=true" >> "${GITHUB_ENV:-/dev/null}"
-  BLANK_NOTE="画面を初期化できなかったため、認証情報の写り込みを避けて録画を無効化した"
+# 画面に認証情報が残っていない保証が取れない場合は、録画だけでなく preview・CDP の
+# tailnet 公開も同じ画面を晒すため、セッション自体を開かず中断する（step を失敗させて後続を止める）
+if ! blank_browser; then
+  warn "\`${SETUP_SCRIPT}\` の失敗後に画面を初期化できなかった。入力途中の認証情報が録画・preview・CDP に露出しうるため、セッションを開かず中断する。"
+  exit 1
 fi
 if [ "$SETUP_STATUS" -eq 124 ] || [ "$SETUP_STATUS" -eq 137 ]; then
-  warn "\`${SETUP_SCRIPT}\` が ${SETUP_TIMEOUT_SECONDS} 秒で終わらなかったため打ち切った（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く。${BLANK_NOTE}。"
+  warn "\`${SETUP_SCRIPT}\` が ${SETUP_TIMEOUT_SECONDS} 秒で終わらなかったため打ち切った（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く（画面は about:blank に戻した）。"
 else
-  warn "\`${SETUP_SCRIPT}\` の実行に失敗した（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く。${BLANK_NOTE}。ログは step「セッションを初期化」を参照。"
+  warn "\`${SETUP_SCRIPT}\` の実行に失敗した（exit ${SETUP_STATUS}）。ログイン前の状態でセッションを開く（画面は about:blank に戻した）。ログは step「セッションを初期化」を参照。"
 fi
 exit 0
