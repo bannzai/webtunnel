@@ -40,18 +40,6 @@ run_with_timeout() {
   fi
 }
 
-# セットアップスクリプトの打ち切り用。既定の timeout はプロセスグループごと殺すため、
-# スクリプトが起動した常駐プロセス（dev サーバ等）まで道連れになり、
-# 「失敗してもセッションは開く」時に手動ログインする相手が消えてしまう。
-# --foreground は COMMAND だけに信号を送り、子孫は生かす（GNU timeout の仕様）
-run_with_timeout_foreground() {
-  local seconds=$1; shift
-  if command -v timeout >/dev/null 2>&1; then
-    timeout --foreground --kill-after 10 "$seconds" "$@"
-  else
-    "$@"
-  fi
-}
 
 # workflow コマンド（`::add-mask::` 等）のデータ部は runner 側で `%25` / `%0D` / `%0A` が
 # 元の文字へ復元される。エスケープせずに渡すと、`%25` を含む値では登録されるマスクが実値とずれ、
@@ -166,9 +154,13 @@ caller_env=(env
   GITHUB_STATE="$DECOY_DIR/state")
 
 # ハングしたスクリプトを step の timeout-minutes に殺させない。step ごと落ちると
-# 録画・tailnet 参加・keepalive まで飛ばされ、「失敗してもセッションは開く」が成立しなくなる
+# 録画・tailnet 参加・keepalive まで飛ばされ、「失敗してもセッションは開く」が成立しなくなる。
+# 打ち切りはプロセスグループごと行う。ハングした子（復号済みの資格情報を環境に持ち、
+# 後から CDP 操作を再開しうる）を残さないため。スクリプトが起動する常駐プロセス
+# （dev サーバ等）は、スクリプト側で setsid によりグループから切り離して生かす
+# （examples/auth-demo/setup.sh 参照）
 set +e
-run_with_timeout_foreground "$SETUP_TIMEOUT_SECONDS" "${caller_env[@]}" bash "$SETUP_SCRIPT"
+run_with_timeout "$SETUP_TIMEOUT_SECONDS" "${caller_env[@]}" bash "$SETUP_SCRIPT"
 SETUP_STATUS=$?
 set -e
 

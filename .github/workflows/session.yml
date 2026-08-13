@@ -79,6 +79,8 @@ env:
   CDP_PORT: "9222"
   # preview（MJPEG）の待ち受けポート。local/webtunnel preview もこの値を前提にする
   PREVIEW_PORT: "9100"
+  # secrets コンテキストは step の if で直接参照できないため、有無だけを env に写して判定に使う
+  WEBTUNNEL_HAS_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV != '' }}
 
 jobs:
   session:
@@ -266,7 +268,7 @@ jobs:
       # 表示にしか効かず artifact のファイル内容は伏字にならない。ログが要るデバッグは
       # secret を外した構成で再現する
       - name: dev サーバのログを artifact にアップロード
-        if: always() && inputs.start_command != '' && secrets.WEBTUNNEL_AUTH_ENV == ''
+        if: always() && inputs.start_command != '' && env.WEBTUNNEL_HAS_AUTH_ENV != 'true'
         timeout-minutes: 10
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:

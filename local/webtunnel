@@ -88,11 +88,12 @@ cmd_up() {
   fi
 }
 
-# CDP が応答するまで待つ（既定 20 分。setup_command やログイン用セットアップが重いプロジェクトは
-# WEBTUNNEL_WAIT_MINUTES で延ばす）。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+# CDP が応答するまで待つ（既定 40 分 = dev サーバ起動 15 分 + Chromium 10 分 + セッション初期化 15 分
+# の step 上限を覆う。WEBTUNNEL_WAIT_MINUTES で変更可）。健全な run を待ち切れず失敗と誤報しないための
+# 上限で、run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 cmd_wait() {
   local session=$1
-  local minutes="${WEBTUNNEL_WAIT_MINUTES:-20}"
+  local minutes="${WEBTUNNEL_WAIT_MINUTES:-40}"
   echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
   local end=$(( $(date +%s) + minutes * 60 ))
   local checks=0

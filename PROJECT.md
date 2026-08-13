@@ -100,7 +100,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **caller のコマンドに OIDC トークンの発行能力を渡さないハードニング**。`id-token: write` の job で `setup_command` が走らせる依存パッケージの install script が Tailscale の trust credential に使える token を発行するのを防ぐ。start-dev-server.sh は `ACTIONS_ID_TOKEN_REQUEST_*` を外し、`GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行する（完全な隔離ではない。「リポジトリ公開に耐える安全性」の残存リスク参照）
 - **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
 - **runner スクリプトの checkout は `.webtunnel-runner` に置く**。checkout はパス先の既存内容を消すため、caller リポジトリに実在しうる名前を避ける。`.webtunnel/` はログイン用セットアップスクリプト（`.webtunnel/setup.sh`。「ログイン済み状態でのセッション開始」参照）の置き場所として caller 側に予約するため checkout 先にしない。それでも `.webtunnel-runner` が存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
-- **`up --wait` の待機は既定 20 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 step の上限 15 分 + Chromium / ログイン用セットアップ / Tailscale のセットアップを覆う。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+- **`up --wait` の待機は既定 40 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 15 分 + Chromium 起動 10 分 + セッション初期化（ログイン）15 分の step 上限と Tailscale のセットアップを覆う。run が消えた場合は即終了するため、長い既定でも失敗検知は遅れない。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
@@ -117,7 +117,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **自動検出**: caller repo に `.webtunnel/setup.sh` があれば実行、なければスキップ。パスは `setup_script` input で差し替えられる（`local/webtunnel up <session> --setup-script <path>`）
 - **実行順序は dev サーバ・Chromium の起動後 → 録画開始前 → tailnet 参加前**。ログイン対象が runner 上の dev サーバでも到達でき、認証情報の露出を止める要（後述）になる順序であり、入れ替えてはいけない
 - **操作は agent-browser の CDP 接続**: 自前の CDP クライアントは作らない（「操作レイヤー」の判断をそのまま適用）。`run-auth-setup.sh` が runner に agent-browser を版指定で入れ、`WEBTUNNEL_CDP_URL`（`http://127.0.0.1:9222`）を環境変数で渡す。cwd は caller repo の workspace ルート
-- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りは `timeout --foreground` でスクリプト本体だけに信号を送り、スクリプトが起動した常駐プロセス（dev サーバ等）を道連れにしない。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
+- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りはプロセスグループごと行い、ハングした子プロセス（復号済みの資格情報を環境に持つ）を残さない。スクリプトが起動する常駐プロセス（dev サーバ等）は、スクリプト側で `setsid` によりグループから切り離して生かす（`examples/auth-demo/setup.sh` 参照）。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
 - **セットアップスクリプトも `start-dev-server.sh` と同じハードニングで実行する**: OIDC 発行能力（`ACTIONS_ID_TOKEN_REQUEST_*`）を外し、GitHub の永続化ファイル（`GITHUB_ENV` 等）をデコイに向けた env で走らせる（「リポジトリ公開に耐える安全性」の 11 参照）
 - 実装は `runner/run-auth-setup.sh`、サンプル兼検証用のセットアップスクリプトは `examples/auth-demo/`
 

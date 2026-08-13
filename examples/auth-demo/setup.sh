@@ -22,8 +22,14 @@ mkdir -p "$WORK"
 
 # すでに listen していれば起動し直さない（冪等）
 if ! curl -fs -m 2 -o /dev/null "${BASE_URL}/login"; then
-  # セッション中はローカルの agent-browser から触るため、この step の後も生かしておく
-  WEBTUNNEL_DEMO_PORT="$PORT" nohup python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 &
+  # セッション中はローカルの agent-browser から触るため、この step の後も生かしておく。
+  # setsid でプロセスグループから切り離すのは、このスクリプトがハングして timeout に
+  # グループごと打ち切られてもサーバを道連れにしないため（setsid の無い環境では通常起動）
+  if command -v setsid >/dev/null 2>&1; then
+    WEBTUNNEL_DEMO_PORT="$PORT" setsid python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 < /dev/null &
+  else
+    WEBTUNNEL_DEMO_PORT="$PORT" nohup python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 &
+  fi
   for _ in $(seq 1 20); do
     curl -fs -m 2 -o /dev/null "${BASE_URL}/login" && break
     sleep 1
