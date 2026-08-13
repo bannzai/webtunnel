@@ -86,7 +86,7 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 対応方法は次の優先順位で選ぶ:
 
 1. **サービス側の dev 限定の工夫（secret 不要）**: dev 環境の匿名認証・自動ログイン・dev DB にしか存在しないテストアカウント等で、ログインの壁自体を無くす
-2. **ローカルからの storage state 注入（Actions に secret を置かない）**: セッション ready 後に `agent-browser --state <state.json>` で、ローカルで一度ログインして保存した認証済み状態を持ち込む
+2. **ローカルからの storage state 注入（Actions に secret を置かない）**: セッション ready 後に `agent-browser --cdp http://<tailscale IP>:9222 --state <state.json> open <url>` で、ローカルで一度ログインして保存した認証済み状態をリモートの Chromium に持ち込む（`--cdp` を付けないとローカルのブラウザに注入してしまう）
 3. **secret `WEBTUNNEL_AUTH_ENV` + セットアップスクリプト**: セッション開始時に runner 上で自動ログインする。前の 2 つが使えない場合（変えられない外部サービス、ログインフロー自体の検証）の汎用経路。設計・secret の作り方・スクリプトの置き場所は PROJECT.md「ログイン済み状態でのセッション開始」を参照する
 
 バックエンド構成ごとの目安:
@@ -98,6 +98,7 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 
 - **dev 限定の仕掛けを本番に漏らさない**: 自動ログイン・テストアカウントは環境変数・ビルドフラグで dev 環境だけ有効にし、本番ビルド・本番 DB には入れない。アプリ側 repo が public ならその工夫のコード自体も公開されるため、知られても無害な設計（dev 環境にしか存在しないアカウント等）にする
 - 本番の全権キー（service_role・本番 DB トークン等）や本番・個人アカウントの資格情報を、webtunnel の経路（secret・セットアップスクリプト・録画に写る画面）に載せない
+- **録画 artifact は公開ダウンロードされる前提で `--no-record` を判断する**: セッション中に手動でログイン操作を行う場合（ログインフロー自体の検証、storage state 注入後の再ログイン等）は入力中の画面が録画に写るため `up <session> --no-record` を必須にする。セットアップスクリプト経由のログインは録画開始前に終わるが、ログイン後の画面に公開できない内容が出るなら同じく `--no-record` にする（PROJECT.md「リポジトリ公開に耐える安全性」の「録画 artifact は公開される前提で使う」参照）
 
 ### Phase 3: 操作する
 
