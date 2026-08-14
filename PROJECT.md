@@ -171,7 +171,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 
 ### リポジトリ公開に耐える安全性
 
-リポジトリは public で運用する（Linux runner 無料）。tailnet 内の実 IP 等の環境固有情報はこのリポジトリに書かない。simtunnel の PROJECT.md「リポジトリ公開に耐える安全性」と同一の原則を適用する:
+リポジトリは public で運用する（Linux runner 無料）。tailnet 内の実 IP 等の環境固有情報は、このリポジトリにも **run のログ・ステップサマリにも**書かない（後者は public リポジトリでは誰でも読める）。simtunnel の PROJECT.md「リポジトリ公開に耐える安全性」と同一の原則を適用する:
 
 1. **公開エンドポイントゼロ**: CDP（:9222）も preview（:9100）も無認証のため、tailnet 内からしか到達できないようにする。runner 上ではどちらも 127.0.0.1 で待ち受け、tailscale インターフェースへの公開は `bridge.sh` の socat だけが行う
 2. **トリガーは `workflow_dispatch` のみ**: 起動できるのは write 権限者だけ。fork からの PR には Secrets / OIDC トークンの権限が渡らない
@@ -185,6 +185,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 10. **録画 artifact は公開される前提で使う**: public リポジトリの artifact はリポジトリの read 権限で取得でき、public repo では GitHub にログインした誰でもダウンロードできる（保持 7 日）。preview・CDP は tailnet 内限定だが、同じ画面が録画にも映るため、セッション画面に映すのは公開されてよい内容に限る。ログイン等の秘匿情報を扱う確認は `up --no-record` で録画を無効にする
 11. **caller のコマンドへ OIDC 発行能力を渡さないハードリング（完全な隔離ではない）**: `session.yml` の job は Tailscale 認証に `id-token: write` を持つため、`setup_command` / `start_command`（依存パッケージの install script を含む）が OIDC トークンを発行できると、tag:ci の auth key を mint できてしまう。`start-dev-server.sh` は caller のコマンドを (a) `ACTIONS_ID_TOKEN_REQUEST_*` を外し、(b) `GITHUB_ENV` / `GITHUB_PATH` / `GITHUB_OUTPUT` / `GITHUB_STATE` を使い捨てファイルへ向けた env で実行し、現ステップでの発行と後続ステップへの環境注入（`BASH_ENV` 等）の両経路を塞ぐ。**ただし同一 VM・`sudo` NOPASSWD のため完全な隔離ではない**（悪意ある caller は別 step のプロセスを覗く等で回避しうる）。残存リスクを受け入れられるのは次の多層防御による: mint できるのは tag:ci の auth key のみ / tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。完全分離は別 job かコンテナ隔離が要るが、dev サーバは session job と同じ runner の localhost で動かす必要があり（tailnet に出さないため）今回は採らない
 12. **セッションに持ち込む認証情報を漏らさない**: base64 単一行の secret + `add-mask`、ログイン操作を録画開始前に済ませる順序、開発環境用アカウント限定の運用で担保する（「ログイン済み状態でのセッション開始」の「認証情報を Actions のログ・artifact に残さないための設計」）
+13. **tailnet の実 IP を run のログ・サマリに出さない**: public リポジトリの run のログ・ステップサマリは誰でも読める。到達には tailnet への参加が要るため IP 単体で侵入できるわけではないが、環境固有情報を公開しない原則をログにも適用する。接続先の IP はローカルの `webtunnel cdp <session>` が `tailscale status` から引くため、runner 側が出力する必要はない（`session.yml` のセッション情報出力と `bridge.sh` の両方が対象）
 
 ### 各アプリ repo での実行（reusable workflow）
 

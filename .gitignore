@@ -4,3 +4,4 @@ var/
 CLAUDE.local.md
 node_modules/
 webProject/dist/
+.env*
