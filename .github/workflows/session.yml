@@ -225,18 +225,19 @@ jobs:
         env:
           SESSION: ${{ inputs.session }}
           PREVIEW: ${{ inputs.preview }}
+        # tailnet の実 IP は出力しない。public リポジトリでは run のログ・サマリを誰でも読めるため
+        # （参照: PROJECT.md「リポジトリ公開に耐える安全性」）。接続先の IP はローカルの
+        # `webtunnel cdp <session>` が tailscale status から引く
         run: |
-          TS_IP="$(tailscale ip -4 | head -1)"
           {
             echo "## WebTunnel session ready"
             echo ""
             echo "- hostname: \`webtunnel-${SESSION}\`"
-            echo "- tailscale IP: \`${TS_IP}\`"
-            echo "- CDP: \`http://${TS_IP}:${CDP_PORT}\`（Host ヘッダ制約のため MagicDNS 名ではなく IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
-            echo "- agent-browser: \`agent-browser --cdp http://${TS_IP}:${CDP_PORT} open <url>\`"
+            echo "- CDP の接続先: \`webtunnel cdp ${SESSION}\`（Host ヘッダ制約のため MagicDNS 名ではなく tailscale IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
+            echo "- スクリーンショット: \`webtunnel screenshot ${SESSION}\`"
             echo "- Chromium が開いた URL: \`${START_URL}\`"
             if [ "$PREVIEW" = "true" ]; then
-              echo "- preview: \`http://${TS_IP}:${PREVIEW_PORT}\`（\`webtunnel preview ${SESSION}\` で開く）"
+              echo "- preview: \`webtunnel preview ${SESSION}\`"
             fi
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
