@@ -66,14 +66,6 @@ if ! command -v gh >/dev/null 2>&1; then
 else
   ok "gh" "$(command -v gh)"
 
-  visibility=$(gh repo view "$REPO" --json visibility --jq '.visibility' 2>/dev/null || true)
-  case "$visibility" in
-    PUBLIC|public) ok "visibility" "public" ;;
-    "") ng "visibility" "リポジトリ情報を取得できない" "リポジトリ名と gh の認証を確認する" ;;
-    *) ng "visibility" "${visibility}（Linux runner の実行が課金対象になる）" \
-          "public リポジトリで実行するか、課金を許容できるか判断する" ;;
-  esac
-
   # ファイルの存在だけでは workflow_dispatch で起動できるか判定できないため、内容まで確認する
   if workflow_yaml=$(gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null); then
     case "$workflow_yaml" in

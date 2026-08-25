@@ -34,7 +34,6 @@ mkdir -p "$STUB_BIN"
 cat > "${STUB_BIN}/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  repo) echo "${GH_STUB_VISIBILITY:-PUBLIC}" ;;
   api)
     # gh api --jq '.content' と同じく base64 で返す（既定は workflow_dispatch を宣言した caller workflow）
     [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] || exit 1
@@ -76,11 +75,6 @@ out=$(run_preflight GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?
 assert "すべて満たす場合は exit 0" "0" "$code"
 assert_contains "すべて満たす場合は READY を出力する" "READY" "$out"
-
-out=$(run_preflight GH_STUB_VISIBILITY=PRIVATE GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
-code=$?
-assert "private リポジトリは exit 1" "1" "$code"
-assert_contains "private リポジトリは visibility を NG にする" "NG   visibility" "$out"
 
 out=$(run_preflight GH_STUB_HAS_WORKFLOW=0 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?

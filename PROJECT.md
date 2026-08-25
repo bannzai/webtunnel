@@ -194,6 +194,7 @@ GitHub の Additional Product Terms は、GitHub-hosted runner の用途を「wo
 - `session.yml` を reusable workflow（`workflow_call`）とし、各アプリ repo からは薄い caller workflow で呼ぶ。webtunnel 自身は `browser-session.yml`（`workflow_dispatch` ラッパー）経由で呼ぶ
 - アプリ repo 側に Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）の登録が必要。OIDC token の subject は caller repo 基準になるため、**caller repo の作成時期に応じて subject 形式が変わる**（「セットアップ手順」の immutable ID 形式を参照）。simtunnel の credential を流用できるとは限らない
 - 起動するプロジェクトは input で渡す（「dev サーバの起動」参照）。`working_directory` は caller リポジトリルート相対
+- caller repo の visibility（public / private）は問わず、preflight でも確認しない。「リポジトリは public で運用する」（「リポジトリ公開に耐える安全性」）は webtunnel リポジトリ自身の方針であり、caller repo の visibility は独立
 
 caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）。`local/webtunnel` は `--start-url` / `--no-record` / `--no-preview` を対応する input の `-f` として送り、**caller 側で未宣言の input を送ると dispatch 自体が拒否される**ため、CLI の全オプションを使えるよう任意 input もパススルーで宣言しておく:
 
