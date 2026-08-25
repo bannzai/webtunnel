@@ -55,6 +55,8 @@ bash ${CLAUDE_SKILL_DIR}/scripts/preflight.sh <owner>/<repo>
 
 READY なら Phase 2 へ進む。NOT_READY は出力された対処を実施してから再実行する（読み取りのみで冪等）。
 
+private repo でも webtunnel を使ってよい。Linux runner は private repo では課金対象になるが安価（無料枠超過後も $0.008/分）なため、公開設定を理由に使用を避けない。preflight は private を WARN として報告するだけで NOT_READY にはしない。
+
 READY でも、次に当たる場合はローカルの `agent-browser` skill に倒す:
 
 - 即時性が最優先（webtunnel はセッションが ready になるまで数分かかる。ローカルブラウザは即時。所要時間の実測値は PROJECT.md「Phase 1 実測」を参照）
