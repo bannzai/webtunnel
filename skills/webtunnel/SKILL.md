@@ -41,7 +41,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 ## ファイル構成
 
 - `scripts/webtunnel-cli.sh` — `local/webtunnel` CLI を、skill の設置場所（symlink 経由を含む）に依存せず呼び出すラッパー
-- `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・tailnet 接続・リポジトリの公開設定・caller workflow・Secrets）を集めて READY / NOT_READY を返す
+- `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・tailnet 接続・caller workflow・Secrets）を集めて READY / NOT_READY を返す
 - `scripts/fetch-recording.sh` — セッション名から workflow run を特定して録画 artifact をダウンロードする
 - `scripts/test/test-webtunnel-cli.sh` / `test-preflight.sh` / `test-fetch-recording.sh` — 各スクリプトの検証
 
@@ -53,9 +53,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 bash ${CLAUDE_SKILL_DIR}/scripts/preflight.sh <owner>/<repo>
 ```
 
-READY なら Phase 2 へ進む。NOT_READY は出力された対処を実施してから再実行する（読み取りのみで冪等）。
-
-private repo でも webtunnel を使ってよい。Linux runner は private repo では課金対象になるが安価（無料枠超過後も $0.008/分）なため、公開設定を理由に使用を避けない。preflight は private を WARN として報告するだけで NOT_READY にはしない。
+READY なら Phase 2 へ進む。NOT_READY は出力された対処を実施してから再実行する（読み取りのみで冪等）。対象 repo の visibility（public / private）は判断材料にしない（private repo でも使ってよい。ローカル / リモートの使い分けの指針は利用側の agent-browser skill を参照）。
 
 READY でも、次に当たる場合はローカルの `agent-browser` skill に倒す:
 
