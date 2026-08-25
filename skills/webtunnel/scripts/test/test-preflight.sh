@@ -34,7 +34,10 @@ mkdir -p "$STUB_BIN"
 cat > "${STUB_BIN}/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  repo) echo "${GH_STUB_VISIBILITY:-PUBLIC}" ;;
+  repo)
+    [ "${GH_STUB_REPO_FAIL:-0}" = "1" ] && exit 1
+    echo "${GH_STUB_VISIBILITY:-PUBLIC}"
+    ;;
   api)
     # gh api --jq '.content' と同じく base64 で返す（既定は workflow_dispatch を宣言した caller workflow）
     [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] || exit 1
@@ -81,6 +84,21 @@ out=$(run_preflight GH_STUB_VISIBILITY=PRIVATE GH_STUB_SECRETS="TS_OIDC_CLIENT_I
 code=$?
 assert "private リポジトリでも exit 0" "0" "$code"
 assert_contains "private リポジトリは visibility を WARN にする" "WARN visibility" "$out"
+
+out=$(run_preflight GH_STUB_VISIBILITY=INTERNAL GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "internal リポジトリでも exit 0" "0" "$code"
+assert_contains "internal リポジトリは visibility を WARN にする" "WARN visibility" "$out"
+
+out=$(run_preflight GH_STUB_VISIBILITY=GARBAGE GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "visibility が未知の値の場合は exit 1" "1" "$code"
+assert_contains "未知の visibility を NG にする" "NG   visibility" "$out"
+
+out=$(run_preflight GH_STUB_REPO_FAIL=1 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "visibility を取得できない場合は exit 1" "1" "$code"
+assert_contains "visibility 取得失敗を NG にする" "NG   visibility" "$out"
 
 out=$(run_preflight GH_STUB_HAS_WORKFLOW=0 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?
