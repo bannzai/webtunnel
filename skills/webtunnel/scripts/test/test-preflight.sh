@@ -79,8 +79,8 @@ assert_contains "すべて満たす場合は READY を出力する" "READY" "$ou
 
 out=$(run_preflight GH_STUB_VISIBILITY=PRIVATE GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?
-assert "private リポジトリは exit 1" "1" "$code"
-assert_contains "private リポジトリは visibility を NG にする" "NG   visibility" "$out"
+assert "private リポジトリでも exit 0" "0" "$code"
+assert_contains "private リポジトリは visibility を WARN にする" "WARN visibility" "$out"
 
 out=$(run_preflight GH_STUB_HAS_WORKFLOW=0 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?

@@ -70,8 +70,7 @@ else
   case "$visibility" in
     PUBLIC|public) ok "visibility" "public" ;;
     "") ng "visibility" "リポジトリ情報を取得できない" "リポジトリ名と gh の認証を確認する" ;;
-    *) ng "visibility" "${visibility}（Linux runner の実行が課金対象になる）" \
-          "public リポジトリで実行するか、課金を許容できるか判断する" ;;
+    *) warn "visibility" "${visibility}（Linux runner は課金対象だが安価なため private でも使用可）" ;;
   esac
 
   # ファイルの存在だけでは workflow_dispatch で起動できるか判定できないため、内容まで確認する
