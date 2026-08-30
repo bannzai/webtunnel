@@ -1,12 +1,17 @@
 #!/bin/bash
-# caller リポジトリの dev サーバを runner の localhost で起動し、応答するまで待つ。
+# caller リポジトリのセットアップを実行し、dev サーバを runner の localhost で起動して応答するまで待つ。
+# START_COMMAND が空の場合はセットアップだけ実行して終わる（拡張のビルドだけが要るセッション）。
 # ポートは PORT 環境変数として両コマンドに渡す（session.yml の port input が SSOT）。
 # ログは RUNNER_TEMP に残し、session.yml が artifact にアップロードする。
-# env: START_COMMAND（必須）/ SETUP_COMMAND / WORKING_DIRECTORY / PORT / READY_PATH
+# env: START_COMMAND / SETUP_COMMAND（どちらか必須）/ WORKING_DIRECTORY / PORT / READY_PATH
 set -euo pipefail
 
-START_COMMAND="${START_COMMAND:?START_COMMAND が未設定}"
+START_COMMAND="${START_COMMAND:-}"
 SETUP_COMMAND="${SETUP_COMMAND:-}"
+[ -n "$START_COMMAND" ] || [ -n "$SETUP_COMMAND" ] || {
+  echo "START_COMMAND と SETUP_COMMAND がどちらも未設定" >&2
+  exit 1
+}
 WORKING_DIRECTORY="${WORKING_DIRECTORY:-.}"
 PORT="${PORT:-5173}"
 READY_PATH="${READY_PATH:-/}"
@@ -42,7 +47,7 @@ assert_loopback_only() {
 # runner は毎回クリーンな VM のため、dev サーバ起動前の応答は想定外。
 # ここで成功扱いにすると Chromium が無関係なサービスを開き、DEV_PID も引き継がれず
 # 監視されないまま ready になってしまう（PR #10 のレビュー指摘）。
-if responding; then
+if [ -n "$START_COMMAND" ] && responding; then
   echo "起動前に ${READY_URL} が応答している。ポート ${PORT} を別プロセスが握っている" >&2
   exit 1
 fi
@@ -73,6 +78,11 @@ if [ -n "$SETUP_COMMAND" ]; then
     tail -n 100 "$SETUP_LOG" >&2
     exit 1
   }
+fi
+
+if [ -z "$START_COMMAND" ]; then
+  echo "start_command が空のため dev サーバは起動しない（セットアップのみ）"
+  exit 0
 fi
 
 echo "start: ${START_COMMAND} (PORT=${PORT})"
