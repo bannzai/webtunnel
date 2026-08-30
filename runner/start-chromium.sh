@@ -1,11 +1,13 @@
 #!/bin/bash
 # Xvfb 上で Chromium (Google Chrome) を headed 起動し、CDP が 127.0.0.1:$CDP_PORT で応答するまで待つ。
 # headless ではなく Xvfb + headed にするのは、ffmpeg の x11grab でセッション全体を録画するため。
-# env: CDP_PORT（既定 9222）/ START_URL（既定 about:blank）
+# env: CDP_PORT（既定 9222）/ START_URL（既定 about:blank）/ EXTENSION_PATH（空なら拡張を読み込まない）
 set -euo pipefail
 
 CDP_PORT="${CDP_PORT:-9222}"
 START_URL="${START_URL:-about:blank}"
+# caller リポジトリルート相対の拡張ディレクトリ（この step の cwd が workspace ルートのため相対のまま解決できる）
+EXTENSION_PATH="${EXTENSION_PATH:-}"
 DISPLAY_NUM=":99"
 WINDOW_SIZE="1280,800"
 SCREEN_SIZE="1280x800x24"
@@ -24,10 +26,55 @@ if ! fc-list 2>/dev/null | grep -qi "noto sans cjk"; then
   fc-cache -f >/dev/null 2>&1 || true
 fi
 
-# ubuntu-latest runner には google-chrome がプリインストールされている
-CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || true)"
+# ubuntu-latest runner には google-chrome と chromium の両方がプリインストールされている。
+# 拡張を読み込む時だけ chromium を優先する（branded な Google Chrome は 137 以降
+# --load-extension / --disable-extensions-except を無視する。PROJECT.md「Chrome 拡張の読み込み」参照）
+if [ -n "$EXTENSION_PATH" ]; then
+  CHROME_BIN="$(command -v chromium-browser || command -v chromium || command -v google-chrome || command -v google-chrome-stable || true)"
+else
+  CHROME_BIN="$(command -v google-chrome || command -v google-chrome-stable || command -v chromium-browser || command -v chromium || true)"
+fi
 [ -n "$CHROME_BIN" ] || { echo "Chromium 系バイナリが見つからない" >&2; exit 1; }
-echo "chrome: $CHROME_BIN ($("$CHROME_BIN" --version))"
+CHROME_VERSION="$("$CHROME_BIN" --version)"
+echo "chrome: $CHROME_BIN ($CHROME_VERSION)"
+
+# 拡張の読み込み引数を組み立てる。存在しないディレクトリ・拡張として不正なディレクトリは
+# Chromium 側がエラーダイアログを出して黙って無視するだけなので、ここで明示的に失敗させる
+EXTENSION_ARGS=()
+if [ -n "$EXTENSION_PATH" ]; then
+  EXTENSION_DIR="$(cd "$EXTENSION_PATH" 2>/dev/null && pwd)" || {
+    echo "extension_path のディレクトリが存在しない: ${EXTENSION_PATH}（cwd: $(pwd)）" >&2
+    echo "拡張のビルドが要る場合は setup_command で先にビルドする" >&2
+    exit 1
+  }
+  [ -f "$EXTENSION_DIR/manifest.json" ] || {
+    echo "extension_path に manifest.json が無い: ${EXTENSION_DIR}" >&2
+    echo "パッケージ化されていない拡張のディレクトリ（ビルド済みの dist 等）を指定する" >&2
+    exit 1
+  }
+  # Chromium・Chrome for Testing は従来どおり読み込める。branded な Google Chrome 137+ は
+  # 引数を無視して「拡張なし」で起動してしまうため、静かに誤検証しないよう失敗させる
+  if [[ "$CHROME_VERSION" == "Google Chrome "[0-9]* ]]; then
+    chrome_major="$(echo "$CHROME_VERSION" | awk '{print $3}' | cut -d. -f1)"
+    [ "${chrome_major:-0}" -lt 137 ] || {
+      echo "拡張の読み込みには Chromium ビルドが必要（branded な Google Chrome は 137 以降 --load-extension を無視する）: ${CHROME_VERSION}" >&2
+      exit 1
+    }
+  fi
+  EXTENSION_ARGS=(--disable-extensions-except="$EXTENSION_DIR" --load-extension="$EXTENSION_DIR")
+  echo "extension: $EXTENSION_DIR"
+
+  # パッケージ化されていない拡張の ID は絶対パスの SHA-256 先頭 16 バイトを 0-f → a-p に写したもの。
+  # popup 等の chrome-extension:// URL を組み立てるために後続 step へ渡す
+  # （manifest に key がある拡張は key 由来の ID になるため導出しない）
+  if grep -qE '"key"[[:space:]]*:' "$EXTENSION_DIR/manifest.json"; then
+    echo "extension id: manifest の key 由来のため導出しない"
+  else
+    EXTENSION_ID="$(printf '%s' "$EXTENSION_DIR" | sha256sum | cut -c1-32 | tr '0-9a-f' 'a-p')"
+    echo "extension id: $EXTENSION_ID"
+    [ -z "${GITHUB_ENV:-}" ] || echo "WEBTUNNEL_EXTENSION_ID=$EXTENSION_ID" >> "$GITHUB_ENV"
+  fi
+fi
 
 nohup Xvfb "$DISPLAY_NUM" -screen 0 "$SCREEN_SIZE" >"$WORK/xvfb.log" 2>&1 &
 # Xvfb の起動完了を待つ（xdpyinfo は runner に無いため、X ソケットが生えるのを確認する）
@@ -63,6 +110,7 @@ DISPLAY="$DISPLAY_NUM" nohup "$CHROME_BIN" \
   --remote-allow-origins='*' \
   --window-position=0,0 \
   --window-size="$WINDOW_SIZE" \
+  ${EXTENSION_ARGS[@]+"${EXTENSION_ARGS[@]}"} \
   "$START_URL" >"$WORK/chrome.log" 2>&1 &
 
 echo "CDP の応答を待機中..."

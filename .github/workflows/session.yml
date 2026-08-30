@@ -50,6 +50,11 @@ on:
         type: string
         required: false
         default: ""
+      extension_path:
+        description: "Chromium に読み込むパッケージ化されていない Chrome 拡張の、caller リポジトリルート相対のディレクトリ（manifest.json のある場所）。空なら読み込まない。ビルドが要る拡張は setup_command でビルドしておく"
+        type: string
+        required: false
+        default: ""
       record:
         description: "セッション画面を録画して artifact に残す"
         type: string
@@ -179,6 +184,8 @@ jobs:
 
       - name: Chromium を起動
         timeout-minutes: 10
+        env:
+          EXTENSION_PATH: ${{ inputs.extension_path }}
         run: ./.webtunnel-runner/runner/start-chromium.sh
 
       # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
@@ -236,6 +243,9 @@ jobs:
             echo "- CDP の接続先: \`webtunnel cdp ${SESSION}\`（Host ヘッダ制約のため MagicDNS 名ではなく tailscale IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
             echo "- スクリーンショット: \`webtunnel screenshot ${SESSION}\`"
             echo "- Chromium が開いた URL: \`${START_URL}\`"
+            if [ -n "${WEBTUNNEL_EXTENSION_ID:-}" ]; then
+              echo "- 読み込んだ拡張: \`chrome-extension://${WEBTUNNEL_EXTENSION_ID}/\`（popup は \`popup.html\` 等の manifest 記載のパス）"
+            fi
             if [ "$PREVIEW" = "true" ]; then
               echo "- preview: \`webtunnel preview ${SESSION}\`"
             fi

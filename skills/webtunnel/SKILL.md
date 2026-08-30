@@ -81,6 +81,12 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 
 `--wait` は CDP がローカルから応答するまで待つ。特定ブランチのコードで動かす `--ref`、最初に開く URL を指定する `--start-url` などのオプションは `local/webtunnel` の冒頭コメントを参照する（`WEBTUNNEL_REPO` を省略すると webtunnel リポジトリ自身が対象になる）。`--start-url` / `--no-record` は caller workflow が `start_url` / `record` input を宣言している場合だけ渡せる（宣言の無い input を送ると dispatch 自体が拒否される。PROJECT.md の caller 例は宣言済み）。
 
+#### Chrome 拡張を読み込んだ状態で確認する
+
+拡張（unpacked）を入れた状態で確認したい場合は、caller workflow の `session.yml` 呼び出しに `extension_path`（ビルド済み拡張ディレクトリ。例: `chrome-extension/dist`）を固定値で書き、拡張のビルドは `setup_command` に含める。`local/webtunnel` の `up` は `extension_path` を送らないため、CLI のオプションではなく caller workflow 側で指定する。
+
+拡張の ID は run のステップサマリに `chrome-extension://<id>/` として出るため、popup の確認は `agent-browser --cdp <URL> open chrome-extension://<id>/popup.html` で行う（`chrome://extensions` は CDP から開いても操作できない）。設計と制約（branded な Google Chrome 137+ では拡張を読み込めないこと等）は PROJECT.md「Chrome 拡張の読み込み」を参照する。
+
 #### ログインが必要なページを扱う
 
 対応方法は次の優先順位で選ぶ:

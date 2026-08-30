@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "webtunnel sample extension",
+  "version": "1.0.0",
+  "description": "extension_path の自己検証用。popup を開いて拡張が読み込まれていることを確認する",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "webtunnel sample extension"
+  }
+}
