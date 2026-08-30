@@ -111,7 +111,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **dev サーバを起動しないセッションでも `setup_command` は実行する**。拡張だけを読み込んで外部サイトを確認する使い方では `start_command` が空になるが、拡張のビルドは `setup_command` が担うため、`setup_command` だけが指定された場合も同じ step で実行し、`start-dev-server.sh` はセットアップだけ行って終わる
 - **拡張を読み込む時だけ Chromium をバイナリ選択の第一候補にする**。branded な Google Chrome は 137 以降 `--load-extension` / `--disable-extensions-except` を無視する（Chromium と Chrome for Testing は従来どおり動く）。ubuntu runner は `google-chrome` と `chromium`（Chromium スナップショットへの symlink）の両方を持つため、優先順を入れ替えるだけで足りる。それでも branded な Chrome 137+ しか無い環境では、拡張なしで黙って起動して誤った動作確認をしないよう起動前に失敗させる
 - **拡張 ID を導出してステップサマリに出す**。ID は、manifest に `key` があれば公開鍵（DER）の、無ければ拡張ディレクトリの絶対パスの SHA-256 先頭 16 バイトを `0-f` → `a-p` に写した値で決まるため、runner 側で計算して `chrome-extension://<id>/` を出力する。popup の確認は CDP でこの URL（`chrome-extension://<id>/popup.html`）を直接開いて行う（`chrome://extensions` は CDP から開いても中身を操作できず、`chrome.management` も CDP からは呼べない）。パスから導出する場合は、Chromium がパスを canonical 化してから ID を決めるのに合わせて symlink を解決した実パス（`pwd -P`）を使う
-- **拡張として読めないディレクトリは起動前に失敗させる**。存在しないディレクトリ・`manifest.json` が無いディレクトリ・`manifest.json` が壊れている（JSON として不正、`manifest_version` が無い）場合が対象。Chromium は拡張の読み込みに失敗しても「拡張なし」で起動して CDP も応答するため、そのままだと拡張が効いていない画面を正常と誤認する
+- **拡張として読めないディレクトリは起動前に失敗させる**。存在しないディレクトリ・`manifest.json` が無いディレクトリ・`manifest.json` が壊れている（JSON として不正、`manifest_version` が無い）場合が対象。指定を間違えたまま「拡張なし」の画面を正常と誤認しないよう、Chromium を起動する前に落とす。なお `manifest.json` の必須項目（`name` / `version`）が欠けるなど Chromium 自身が拒否する拡張を渡した場合は、Chromium の起動自体が完了せず CDP が応答しないため、起動後の CDP 応答待ちで失敗する（実測。runner の Chromium で確認）
 - 自己検証用のサンプル拡張を `webExtension/`（popup だけを持つ最小の Manifest V3 拡張）に置く。`browser-session.yml` に `-f extension_path=webExtension` を渡すと読み込まれ、popup の URL がステップサマリに出る
 
 ### 自己検証用のサンプル Web アプリ（webProject）
