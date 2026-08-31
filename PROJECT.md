@@ -89,6 +89,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 | `port` | dev サーバが listen するポート |
 | `ready_path` | ready 判定に使うパス |
 | `node_version` | `actions/setup-node` で用意する Node のバージョン。空なら runner のプリインストール版 |
+| `extension_path` | Chromium に読み込む Chrome 拡張（unpacked）のディレクトリ。空なら読み込まない（「Chrome 拡張の読み込み」参照） |
 
 - **ポートは `PORT` 環境変数として両コマンドへ渡す**。`port` input を SSOT にして、コマンド文字列側にポート番号を重複させない。Next.js / Nuxt / CRA は `PORT` をそのまま解釈し、Vite は `vite.config.js` で `process.env.PORT` を読む
 - **ready 判定は `http://127.0.0.1:<port><ready_path>` への到達**とし、HTTP ステータスは問わない（応答がある = listen している）。dev サーバのプロセスが死んだら待たずに即失敗させ、ログ末尾を step の出力に出す。ready 後もプロセス ID を keepalive に引き継いで監視し、死んだらセッションを終了する（動作確認の対象が消えたセッションを維持しない）
@@ -101,6 +102,17 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
 - **runner スクリプトの checkout は `.webtunnel-runner` に置く**。checkout はパス先の既存内容を消すため、caller リポジトリに実在しうる名前を避ける。`.webtunnel/` はログイン用セットアップスクリプト（`.webtunnel/setup.sh`。「ログイン済み状態でのセッション開始」参照）の置き場所として caller 側に予約するため checkout 先にしない。それでも `.webtunnel-runner` が存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
 - **`up --wait` の待機は既定 40 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 15 分 + Chromium 起動 10 分 + セッション初期化（ログイン）15 分の step 上限と Tailscale のセットアップを覆う。run が消えた場合は即終了するため、長い既定でも失敗検知は遅れない。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+
+### Chrome 拡張の読み込み
+
+拡張を入れた状態でしか再現しない挙動（content script によるページ書き換え・popup の表示）を確認するために、`extension_path`（caller リポジトリルート相対の unpacked 拡張ディレクトリ）を持たせる。非空なら `start-chromium.sh` が `--disable-extensions-except=<絶対パス> --load-extension=<絶対パス>` を付けて Chromium を起動する。
+
+- **拡張のビルドは `setup_command` に任せる**（例: `cd chrome-extension && npm ci && npm run build`）。dev サーバのビルドと同じ考え方で、拡張専用のビルド経路は作らない。`extension_path` に渡すのはビルド済みのディレクトリ（`chrome-extension/dist` 等）
+- **dev サーバを起動しないセッションでも `setup_command` は実行する**。拡張だけを読み込んで外部サイトを確認する使い方では `start_command` が空になるが、拡張のビルドは `setup_command` が担うため、`setup_command` だけが指定された場合も同じ step で実行し、`start-dev-server.sh` はセットアップだけ行って終わる
+- **拡張を読み込む時だけ Chromium をバイナリ選択の第一候補にする**。branded な Google Chrome は 137 以降 `--load-extension` / `--disable-extensions-except` を無視する（Chromium と Chrome for Testing は従来どおり動く）。ubuntu runner は `google-chrome` と `chromium`（Chromium スナップショットへの symlink）の両方を持つため、優先順を入れ替えるだけで足りる。それでも branded な Chrome 137+ しか無い環境では、拡張なしで黙って起動して誤った動作確認をしないよう起動前に失敗させる
+- **拡張 ID を導出してステップサマリに出す**。ID は、manifest に `key` があれば公開鍵（DER）の、無ければ拡張ディレクトリの絶対パスの SHA-256 先頭 16 バイトを `0-f` → `a-p` に写した値で決まるため、runner 側で計算して `chrome-extension://<id>/` を出力する。popup の確認は CDP でこの URL（`chrome-extension://<id>/popup.html`）を直接開いて行う（`chrome://extensions` は CDP から開いても中身を操作できず、`chrome.management` も CDP からは呼べない）。パスから導出する場合は、Chromium がパスを canonical 化してから ID を決めるのに合わせて symlink を解決した実パス（`pwd -P`）を使う
+- **拡張として読めないディレクトリは起動前に失敗させる**。存在しないディレクトリ・`manifest.json` が無いディレクトリ・`manifest.json` が壊れている（JSON として不正、`manifest_version` が無い）場合が対象。指定を間違えたまま「拡張なし」の画面を正常と誤認しないよう、Chromium を起動する前に落とす。なお `manifest.json` の必須項目（`name` / `version`）が欠けるなど Chromium 自身が拒否する拡張を渡した場合は、Chromium の起動自体が完了せず CDP が応答しないため、起動後の CDP 応答待ちで失敗する（実測。runner の Chromium で確認）
+- 自己検証用のサンプル拡張を `webExtension/`（popup だけを持つ最小の Manifest V3 拡張）に置く。`browser-session.yml` に `-f extension_path=webExtension` を渡すと読み込まれ、popup の URL がステップサマリに出る
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
@@ -243,6 +255,8 @@ jobs:
       start_command: npm run dev
       port: "3000"
       node_version: "22"
+      # Chrome 拡張を読み込んで確認する場合だけ指定する（ビルドは setup_command で済ませておく）
+      # extension_path: chrome-extension/dist
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
@@ -280,6 +294,7 @@ webtunnel/
 │       ├── server.py                 # cookie が無いと中身が見えないデモサーバ
 │       └── setup.sh                  # setup_script のサンプル（agent-browser でフォームログイン）
 ├── webProject/                       # 自己検証用のサンプル Web アプリ（Vite）
+├── webExtension/                     # 自己検証用のサンプル Chrome 拡張（Manifest V3・popup のみ）
 ├── local/
 │   └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / preview / screenshot / wait
 └── skills/                           # AI エージェント向け skill（Agent Skills 標準）

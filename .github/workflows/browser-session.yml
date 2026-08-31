@@ -38,6 +38,10 @@ on:
         description: "セッション画面をリアルタイムに見る preview（MJPEG）を tailnet に公開する"
         required: false
         default: "true"
+      extension_path:
+        description: "読み込む Chrome 拡張（unpacked）のディレクトリ。空なら読み込まない。サンプル拡張は webExtension"
+        required: false
+        default: ""
 
 jobs:
   session:
@@ -58,6 +62,7 @@ jobs:
       record: ${{ inputs.record }}
       setup_script: ${{ inputs.setup_script }}
       preview: ${{ inputs.preview }}
+      extension_path: ${{ inputs.extension_path }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
