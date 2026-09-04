@@ -349,6 +349,8 @@ credential の subject 形式は repo の作成時期で変わる（前掲「OID
 gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'
 ```
 
+`skills/webtunnel/scripts/preflight.sh <owner>/<repo>` の `oidc-subject` の行にも、同じ接頭辞とその形式（従来形式 / immutable ID 形式）、credential に設定すべき Subject が出る。
+
 ### 2. trust credential を発行して Secrets に登録する
 
 返ってきた接頭辞に `:*` を付けた値を Subject にして credential を発行し（手順は「1. Trust credential の発行（OIDC）」と同じ）、導入先 repo に登録する:
@@ -359,6 +361,8 @@ gh secret set TS_OIDC_AUDIENCE -R <owner>/<repo>
 ```
 
 既存の credential の subject がその repo をカバーしていれば（ワイルドカードの範囲内なら）発行は不要で、同じ Client ID / Audience をそのまま登録すればよい。
+
+形式が違う credential を流用してはいけない（例: immutable ID 形式の webtunnel 用 credential を、従来形式の repo にそのまま登録する）。Secrets の名前は揃っていても subject が一致しないため、run の「Tailscale に参加」step が `failed to exchange JWT for access token: token exchange failed with status 403` で失敗する（実例: https://github.com/bannzai/castle/issues/854 ）。その場合は「1. subject 接頭辞を確認する」に戻り、接頭辞に合う Subject の credential を別に発行する。
 
 ### 3. caller workflow を追加する
 
