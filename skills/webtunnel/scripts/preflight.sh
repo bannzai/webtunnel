@@ -85,8 +85,8 @@ else
   # (他の repo 用に発行した credential の値を流用すると、形式が違えば「Tailscale に参加」が 403 になる)
   if sub_prefix=$(gh api "repos/${REPO}/actions/oidc/customization/sub" --jq '.sub_claim_prefix' 2>/dev/null) && [ -n "$sub_prefix" ]; then
     case "$sub_prefix" in
-      repo:*@*/*@*) sub_format="immutable ID 形式 (2026-07-15 以降に作成された repo)" ;;
-      repo:*/*)     sub_format="従来形式 (2026-07-15 より前に作成された repo)" ;;
+      repo:*@*/*@*) sub_format="immutable ID 形式 (2026-07-15 以降に作成・rename・transfer された repo、または immutable subject に opt-in した repo)" ;;
+      repo:*/*)     sub_format="従来形式 (上記に当たらない、2026-07-15 より前から名前が変わっていない repo)" ;;
       *)            sub_format="" ;;
     esac
     if [ -n "$sub_format" ]; then

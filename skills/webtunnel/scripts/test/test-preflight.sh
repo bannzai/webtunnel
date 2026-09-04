@@ -46,6 +46,11 @@ case "$1" in
       *oidc/customization/sub*)
         # gh api --jq '.sub_claim_prefix' と同じく接頭辞を平文 1 行で返す
         [ "${GH_STUB_SUB_READABLE:-1}" = "1" ] || exit 1
+        # preflight が引数の repo で API を呼んでいるかを検査する（未設定なら検査しない）
+        if [ -n "${GH_STUB_SUB_EXPECT_REPO:-}" ] && \
+           [ "$2" != "repos/${GH_STUB_SUB_EXPECT_REPO}/actions/oidc/customization/sub" ]; then
+          exit 1
+        fi
         printf '%s\n' "${GH_STUB_SUB_PREFIX:-repo:bannzai@10897361/webtunnel@1329484094}"
         ;;
       *)
@@ -134,7 +139,7 @@ assert_contains "immutable ID 形式であることを出力する" "immutable I
 assert_contains "必要な Subject を出力する" "repo:bannzai@10897361/webtunnel@1329484094:*" "$out"
 assert_contains "Subject 不一致で 403 になることを注意書きする" "403" "$out"
 
-out=$(PREFLIGHT_REPO=bannzai/kaiyaku run_preflight GH_STUB_SUB_PREFIX="repo:bannzai/kaiyaku" GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+out=$(PREFLIGHT_REPO=bannzai/kaiyaku run_preflight GH_STUB_SUB_EXPECT_REPO=bannzai/kaiyaku GH_STUB_SUB_PREFIX="repo:bannzai/kaiyaku" GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
 code=$?
 assert "従来形式の subject 接頭辞でも exit 0" "0" "$code"
 assert_contains "従来形式でも subject 接頭辞を OK として出力する" "OK   oidc-subject" "$out"

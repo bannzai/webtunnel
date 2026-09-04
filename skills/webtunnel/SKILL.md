@@ -69,7 +69,7 @@ READY でも、次に当たる場合はローカルの `agent-browser` skill に
 
 #### caller workflow の整備
 
-対象 repo に `.github/workflows/browser-session.yml` が無い場合は、PROJECT.md「各アプリ repo での実行（reusable workflow）」の caller workflow を追加する。Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）は次の順序で用意する。trust credential の Subject は caller repo の OIDC subject に一致しないと認証できず、その形式は repo の作成時期で変わる（2026-07-15 以降に作成された repo は immutable ID 形式 `repo:<owner>@<owner-id>/<repo>@<repo-id>`、それより前は従来形式 `repo:<owner>/<repo>`。詳細は PROJECT.md「OIDC subject は immutable ID 形式になる」）。preflight は Secrets の存在しか判定できないため、Subject の突き合わせは人が行う。
+対象 repo に `.github/workflows/browser-session.yml` が無い場合は、PROJECT.md「各アプリ repo での実行（reusable workflow）」の caller workflow を追加する。Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`）は次の順序で用意する。trust credential の Subject は caller repo の OIDC subject に一致しないと認証できず、その形式は repo によって変わる（2026-07-15 以降に作成・rename・transfer された repo と immutable subject に opt-in した repo は immutable ID 形式 `repo:<owner>@<owner-id>/<repo>@<repo-id>`、それ以外は従来形式 `repo:<owner>/<repo>`。形式は API の `sub_claim_prefix` の実物で判断する。詳細は PROJECT.md「OIDC subject は immutable ID 形式になる」）。preflight は Secrets の存在しか判定できないため、Subject の突き合わせは人が行う。
 
 1. 対象 repo の subject 接頭辞を確認する。
 
@@ -86,7 +86,7 @@ READY でも、次に当たる場合はローカルの `agent-browser` skill に
    gh secret set TS_OIDC_AUDIENCE -R <owner>/<repo>
    ```
 
-4. 初回の `up` で「Tailscale に参加」step が `token exchange failed with status 403` になったら Subject 不一致とみなし、1 に戻って接頭辞と credential の Subject を突き合わせる。
+4. 初回の `up` で「Tailscale に参加」step が `token exchange failed with status 403` になったら Subject 不一致の可能性が高いとみなし、1 に戻って接頭辞と credential の Subject を突き合わせる。あわせて Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` がその credential の Client ID / Audience の組み合わせと一致しているかも確認する（値の誤りや別 credential との混在でも同じ 403 になる）。
 
 ### Phase 2: セッションを起動する
 
@@ -162,7 +162,7 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.s
 - `up` が「すでに起動中」と返す → `webtunnel-cli.sh list` で tailnet と run の状態を確認し、不要な run を down する
 - `status` が応答しない（tailnet にホストが無い）→ セットアップ中か run の失敗。`gh run view <run-id> --log-failed -R <owner>/<repo>` でログを確認する
 - CDP には繋がるがページが表示されない → screenshot を Read して確認し、runner から到達できない URL を開いていないか確認する
-- `up` の run で「Tailscale に参加」が `token exchange failed with status 403` で失敗する → trust credential の Subject と caller repo の OIDC subject が一致していない。「caller workflow の整備」の 1（`gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'` で subject 接頭辞を確認する）に戻って突き合わせる
+- `up` の run で「Tailscale に参加」が `token exchange failed with status 403` で失敗する → trust credential の Subject と caller repo の OIDC subject の不一致、または Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い。「caller workflow の整備」の 1（`gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'` で subject 接頭辞を確認する）に戻って接頭辞を突き合わせ、Secrets の値も確認する
 - `fetch-recording.sh` が「まだ実行中」と返す → 録画はセッション終了時にアップロードされるため、`down` の後に再実行する
 
 ## 検証方法

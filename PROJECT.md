@@ -308,7 +308,7 @@ Tailscale の ACL は simtunnel の Phase 0 で設定済みのものを共用す
 
 ### OIDC subject は immutable ID 形式になる（重要）
 
-GitHub は 2026-07-15 以降に作成されたリポジトリの OIDC subject claim を **immutable ID 形式**にした。owner 名・repo 名に数値 ID が付き、`include_claim_keys` でカスタマイズしても ID は除去できない（参照: https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/ ）。
+GitHub は 2026-07-15 以降に作成・rename・transfer されたリポジトリ（および immutable subject に opt-in したリポジトリ）の OIDC subject claim を **immutable ID 形式**にした。owner 名・repo 名に数値 ID が付き、`include_claim_keys` でカスタマイズしても ID は除去できない（参照: https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/ ）。
 
 ```text
 従来（simtunnel 等、2026-07-15 より前に作成）: repo:bannzai/simtunnel:ref:refs/heads/main
@@ -362,7 +362,7 @@ gh secret set TS_OIDC_AUDIENCE -R <owner>/<repo>
 
 既存の credential の subject がその repo をカバーしていれば（ワイルドカードの範囲内なら）発行は不要で、同じ Client ID / Audience をそのまま登録すればよい。
 
-形式が違う credential を流用してはいけない（例: immutable ID 形式の webtunnel 用 credential を、従来形式の repo にそのまま登録する）。Secrets の名前は揃っていても subject が一致しないため、run の「Tailscale に参加」step が `failed to exchange JWT for access token: token exchange failed with status 403` で失敗する（実例: https://github.com/bannzai/castle/issues/854 ）。その場合は「1. subject 接頭辞を確認する」に戻り、接頭辞に合う Subject の credential を別に発行する。
+形式が違う credential を流用してはいけない（例: immutable ID 形式の webtunnel 用 credential を、従来形式の repo にそのまま登録する）。Secrets の名前は揃っていても subject が一致しないため、run の「Tailscale に参加」step が `failed to exchange JWT for access token: token exchange failed with status 403` で失敗する（実例: https://github.com/bannzai/castle/issues/854 ）。その場合は「1. subject 接頭辞を確認する」に戻り、接頭辞に合う Subject の credential を別に発行する。同じ 403 は Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い（別の credential の値が混ざる）でも起きるため、接頭辞の確認とあわせて Client ID / Audience が発行した credential の組み合わせと一致しているかも確認する。
 
 ### 3. caller workflow を追加する
 
