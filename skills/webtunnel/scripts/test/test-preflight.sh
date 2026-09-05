@@ -27,6 +27,13 @@ assert_contains() {
     *) assert "$name" "contains:${needle}" "missing" ;;
   esac
 }
+assert_not_contains() {
+  local name=$1 needle=$2 haystack=$3
+  case "$haystack" in
+    *"$needle"*) assert "$name" "not-contains:${needle}" "contains" ;;
+    *) assert "$name" "not-contains" "not-contains" ;;
+  esac
+}
 
 STUB_BIN="${TMP}/bin"
 mkdir -p "$STUB_BIN"
@@ -35,11 +42,25 @@ cat > "${STUB_BIN}/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
   api)
-    # gh api --jq '.content' と同じく base64 で返す（既定は workflow_dispatch を宣言した caller workflow）
-    [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] || exit 1
-    printf '%s\n' "${GH_STUB_WORKFLOW_YAML:-on:
+    case "${2:-}" in
+      *oidc/customization/sub*)
+        # gh api --jq '.sub_claim_prefix' と同じく接頭辞を平文 1 行で返す
+        [ "${GH_STUB_SUB_READABLE:-1}" = "1" ] || exit 1
+        # preflight が引数の repo で API を呼んでいるかを検査する（未設定なら検査しない）
+        if [ -n "${GH_STUB_SUB_EXPECT_REPO:-}" ] && \
+           [ "$2" != "repos/${GH_STUB_SUB_EXPECT_REPO}/actions/oidc/customization/sub" ]; then
+          exit 1
+        fi
+        printf '%s\n' "${GH_STUB_SUB_PREFIX:-repo:bannzai@10897361/webtunnel@1329484094}"
+        ;;
+      *)
+        # gh api --jq '.content' と同じく base64 で返す（既定は workflow_dispatch を宣言した caller workflow）
+        [ "${GH_STUB_HAS_WORKFLOW:-1}" = "1" ] || exit 1
+        printf '%s\n' "${GH_STUB_WORKFLOW_YAML:-on:
   workflow_dispatch:
 }" | base64
+        ;;
+    esac
     ;;
   secret)
     [ "${GH_STUB_SECRETS_READABLE:-1}" = "1" ] || exit 1
@@ -66,9 +87,11 @@ EOF
 chmod +x "${STUB_BIN}/gh" "${STUB_BIN}/tailscale" "${STUB_BIN}/agent-browser" "${TMP}/stub-webtunnel"
 
 # 実環境の gh / tailscale / agent-browser を拾わないよう PATH を最小構成にする
+# 判定対象の repo は PREFLIGHT_REPO で差し替える（env に渡すスタブ用の変数とは別扱いにする）
 run_preflight() {
+  local repo="${PREFLIGHT_REPO:-bannzai/webtunnel}"
   env PATH="${STUB_BIN}:/usr/bin:/bin" WEBTUNNEL_CLI="${TMP}/stub-webtunnel" "$@" \
-    bash "$SCRIPT" bannzai/webtunnel 2>&1
+    bash "$SCRIPT" "$repo" 2>&1
 }
 
 out=$(run_preflight GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
@@ -107,6 +130,27 @@ out=$(run_preflight GH_STUB_SECRETS_READABLE=0)
 code=$?
 assert "secret 一覧を取得できない場合は WARN 扱いで exit 0" "0" "$code"
 assert_contains "secret 未確認は WARN として出力する" "WARN secrets" "$out"
+
+out=$(run_preflight GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "immutable ID 形式の subject 接頭辞でも exit 0" "0" "$code"
+assert_contains "subject 接頭辞を OK として出力する" "OK   oidc-subject" "$out"
+assert_contains "immutable ID 形式であることを出力する" "immutable ID 形式" "$out"
+assert_contains "必要な Subject を出力する" "repo:bannzai@10897361/webtunnel@1329484094:*" "$out"
+assert_contains "Subject 不一致で 403 になることを注意書きする" "403" "$out"
+
+out=$(PREFLIGHT_REPO=bannzai/kaiyaku run_preflight GH_STUB_SUB_EXPECT_REPO=bannzai/kaiyaku GH_STUB_SUB_PREFIX="repo:bannzai/kaiyaku" GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "従来形式の subject 接頭辞でも exit 0" "0" "$code"
+assert_contains "従来形式でも subject 接頭辞を OK として出力する" "OK   oidc-subject" "$out"
+assert_contains "従来形式であることを出力する" "従来形式" "$out"
+assert_contains "従来形式の必要な Subject を出力する" "repo:bannzai/kaiyaku:*" "$out"
+assert_not_contains "従来形式を immutable ID 形式と誤判定しない" "immutable ID 形式" "$out"
+
+out=$(run_preflight GH_STUB_SUB_READABLE=0 GH_STUB_SECRETS="TS_OIDC_CLIENT_ID TS_OIDC_AUDIENCE")
+code=$?
+assert "subject 接頭辞を取得できない場合は WARN 扱いで exit 0" "0" "$code"
+assert_contains "subject 接頭辞の未確認は WARN として出力する" "WARN oidc-subject" "$out"
 
 out=$(env PATH="${STUB_BIN}:/usr/bin:/bin" WEBTUNNEL_CLI="${TMP}/stub-webtunnel" bash "$SCRIPT" 2>&1)
 code=$?
