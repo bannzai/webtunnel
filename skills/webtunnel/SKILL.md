@@ -44,6 +44,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 - `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・tailnet 接続・caller workflow・Secrets）を集めて READY / NOT_READY を返す。あわせて対象 repo の OIDC subject 接頭辞とその形式、trust credential に設定すべき Subject を `oidc-subject` の行に表示する（Subject の一致は API で判定できないため、人が突き合わせる材料として出す）
 - `scripts/fetch-recording.sh` — セッション名から workflow run を特定して録画 artifact をダウンロードする
 - `scripts/test/test-webtunnel-cli.sh` / `test-preflight.sh` / `test-fetch-recording.sh` — 各スクリプトの検証
+- `references/godot-web-export.md` — Godot の Web エクスポートを開く時の起動判定と、ゲーム座標をクリック座標に写す方法
 
 ## ワークフロー
 
@@ -96,7 +97,11 @@ READY でも、次に当たる場合はローカルの `agent-browser` skill に
 WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh up <session> --wait
 ```
 
-`--wait` は CDP がローカルから応答するまで待つ。特定ブランチのコードで動かす `--ref`、最初に開く URL を指定する `--start-url` などのオプションは `local/webtunnel` の冒頭コメントを参照する（`WEBTUNNEL_REPO` を省略すると webtunnel リポジトリ自身が対象になる）。`--start-url` / `--no-record` は caller workflow が `start_url` / `record` input を宣言している場合だけ渡せる（宣言の無い input を送ると dispatch 自体が拒否される。PROJECT.md の caller 例は宣言済み）。
+`--wait` は CDP がローカルから応答するまで待つ。特定ブランチのコードで動かす `--ref`、最初に開く URL を指定する `--start-url` などのオプションは `local/webtunnel` の冒頭コメントを参照する（`WEBTUNNEL_REPO` を省略すると webtunnel リポジトリ自身が対象になる）。`--start-url` / `--no-record` / `--software-webgl` は caller workflow が `start_url` / `record` / `software_webgl` input を宣言している場合だけ渡せる（宣言の無い input を送ると dispatch 自体が拒否される。PROJECT.md の caller 例は宣言済み）。
+
+#### WebGL2 が要るページ（Godot の Web エクスポート等）を開く
+
+runner の Chromium は既定で WebGL2 が無効のため、WebGL2 を要求するページは `up <session> --software-webgl` で起動する（SwiftShader によるソフトウェア WebGL。付くフラグは固定で、設計は PROJECT.md「ソフトウェア WebGL（SwiftShader）」）。Godot プロジェクトの caller workflow の書き方（Web エクスポートと静的サーバの起動）は PROJECT.md「新しいプロジェクトに webtunnel を導入する > Godot プロジェクトの例」、起動の判定とゲーム座標をクリック座標へ写す方法は `references/godot-web-export.md` を読む。
 
 #### Chrome 拡張を読み込んだ状態で確認する
 
@@ -162,6 +167,7 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.s
 - `up` が「すでに起動中」と返す → `webtunnel-cli.sh list` で tailnet と run の状態を確認し、不要な run を down する
 - `status` が応答しない（tailnet にホストが無い）→ セットアップ中か run の失敗。`gh run view <run-id> --log-failed -R <owner>/<repo>` でログを確認する
 - CDP には繋がるがページが表示されない → screenshot を Read して確認し、runner から到達できない URL を開いていないか確認する
+- Godot の Web エクスポートが `WebGL2 - Check web browser configuration and hardware support` で起動しない → `--software-webgl` を付けずに起動している。down して `up <session> --software-webgl` で起動し直す（`references/godot-web-export.md`）
 - `up` の run で「Tailscale に参加」が `token exchange failed with status 403` で失敗する → trust credential の Subject と caller repo の OIDC subject の不一致、または Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い。「caller workflow の整備」の 1（`gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'` で subject 接頭辞を確認する）に戻って接頭辞を突き合わせ、Secrets の値も確認する
 - `fetch-recording.sh` が「まだ実行中」と返す → 録画はセッション終了時にアップロードされるため、`down` の後に再実行する
 

@@ -1,18 +1,40 @@
 #!/bin/bash
 # Xvfb 上で Chromium (Google Chrome) を headed 起動し、CDP が 127.0.0.1:$CDP_PORT で応答するまで待つ。
 # headless ではなく Xvfb + headed にするのは、ffmpeg の x11grab でセッション全体を録画するため。
-# env: CDP_PORT（既定 9222）/ START_URL（既定 about:blank）/ EXTENSION_PATH（空なら拡張を読み込まない）
+# env: CDP_PORT（既定 9222）/ START_URL（既定 about:blank）/ EXTENSION_PATH（空なら拡張を読み込まない）/
+#      SOFTWARE_WEBGL（true でソフトウェア WebGL。既定 false）
 set -euo pipefail
 
 CDP_PORT="${CDP_PORT:-9222}"
 START_URL="${START_URL:-about:blank}"
 # caller リポジトリルート相対の拡張ディレクトリ（この step の cwd が workspace ルートのため相対のまま解決できる）
 EXTENSION_PATH="${EXTENSION_PATH:-}"
+# 既定 false: Xvfb 上の headed Chromium は既定で WebGL2 が無効だが、通常の Web アプリの動作確認には要らず、
+# SwiftShader の描画は CPU を使うため、WebGL2 が要る（Godot の Web エクスポート等）セッションだけが有効にする
+SOFTWARE_WEBGL="${SOFTWARE_WEBGL:-false}"
 DISPLAY_NUM=":99"
 WINDOW_SIZE="1280,800"
 SCREEN_SIZE="1280x800x24"
 WORK="${RUNNER_TEMP:-$(pwd)/tmp}"
 mkdir -p "$WORK"
+
+# ソフトウェア WebGL（SwiftShader）を有効にするフラグは固定リストで、caller から任意のフラグ文字列は受けない
+# （--remote-debugging-address=0.0.0.0 等で CDP を tailnet の外へ露出させられるため。
+# PROJECT.md「ソフトウェア WebGL（SwiftShader）」「リポジトリ公開に耐える安全性」参照）
+SOFTWARE_WEBGL_ARGS=()
+case "$SOFTWARE_WEBGL" in
+  true)
+    SOFTWARE_WEBGL_ARGS=(--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader)
+    echo "software webgl: enabled (${SOFTWARE_WEBGL_ARGS[*]})"
+    ;;
+  false)
+    echo "software webgl: disabled"
+    ;;
+  *)
+    echo "software_webgl は true / false のみ許可: ${SOFTWARE_WEBGL}" >&2
+    exit 1
+    ;;
+esac
 
 # 読み込む拡張の検証と ID の導出。Chromium は拡張の読み込みに失敗しても「拡張なし」で起動して
 # CDP も応答するため、誤った動作確認にならないよう起動前に落とす（PROJECT.md「Chrome 拡張の読み込み」参照）
@@ -123,6 +145,7 @@ DISPLAY="$DISPLAY_NUM" nohup "$CHROME_BIN" \
   --window-position=0,0 \
   --window-size="$WINDOW_SIZE" \
   ${EXTENSION_ARGS[@]+"${EXTENSION_ARGS[@]}"} \
+  ${SOFTWARE_WEBGL_ARGS[@]+"${SOFTWARE_WEBGL_ARGS[@]}"} \
   "$START_URL" >"$WORK/chrome.log" 2>&1 &
 
 echo "CDP の応答を待機中..."

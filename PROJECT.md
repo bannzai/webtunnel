@@ -90,6 +90,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 | `ready_path` | ready 判定に使うパス |
 | `node_version` | `actions/setup-node` で用意する Node のバージョン。空なら runner のプリインストール版 |
 | `extension_path` | Chromium に読み込む Chrome 拡張（unpacked）のディレクトリ。空なら読み込まない（「Chrome 拡張の読み込み」参照） |
+| `software_webgl` | `true` でソフトウェア WebGL（SwiftShader）を有効にして Chromium を起動する。既定 `false`（「ソフトウェア WebGL（SwiftShader）」参照） |
 
 - **ポートは `PORT` 環境変数として両コマンドへ渡す**。`port` input を SSOT にして、コマンド文字列側にポート番号を重複させない。Next.js / Nuxt / CRA は `PORT` をそのまま解釈し、Vite は `vite.config.js` で `process.env.PORT` を読む
 - **ready 判定は `http://127.0.0.1:<port><ready_path>` への到達**とし、HTTP ステータスは問わない（応答がある = listen している）。dev サーバのプロセスが死んだら待たずに即失敗させ、ログ末尾を step の出力に出す。ready 後もプロセス ID を keepalive に引き継いで監視し、死んだらセッションを終了する（動作確認の対象が消えたセッションを維持しない）
@@ -113,6 +114,20 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **拡張 ID を導出してステップサマリに出す**。ID は、manifest に `key` があれば公開鍵（DER）の、無ければ拡張ディレクトリの絶対パスの SHA-256 先頭 16 バイトを `0-f` → `a-p` に写した値で決まるため、runner 側で計算して `chrome-extension://<id>/` を出力する。popup の確認は CDP でこの URL（`chrome-extension://<id>/popup.html`）を直接開いて行う（`chrome://extensions` は CDP から開いても中身を操作できず、`chrome.management` も CDP からは呼べない）。パスから導出する場合は、Chromium がパスを canonical 化してから ID を決めるのに合わせて symlink を解決した実パス（`pwd -P`）を使う
 - **拡張として読めないディレクトリは起動前に失敗させる**。存在しないディレクトリ・`manifest.json` が無いディレクトリ・`manifest.json` が壊れている（JSON として不正、`manifest_version` が無い）場合が対象。指定を間違えたまま「拡張なし」の画面を正常と誤認しないよう、Chromium を起動する前に落とす。なお `manifest.json` の必須項目（`name` / `version`）が欠けるなど Chromium 自身が拒否する拡張を渡した場合は、Chromium の起動自体が完了せず CDP が応答しないため、起動後の CDP 応答待ちで失敗する（実測。runner の Chromium で確認）
 - 自己検証用のサンプル拡張を `webExtension/`（popup だけを持つ最小の Manifest V3 拡張）に置く。`browser-session.yml` に `-f extension_path=webExtension` を渡すと読み込まれ、popup の URL がステップサマリに出る
+
+### ソフトウェア WebGL（SwiftShader）
+
+ubuntu-latest の Xvfb 上の headed Chromium は、既定では WebGL2 が無効になる（GPU が無く、ソフトウェアレンダラへの自動フォールバックは headed では働かない）。WebGL2 を要求するページ、代表的には Godot の Web エクスポートは `WebGL2 - Check web browser configuration and hardware support` で起動しない。`software_webgl` input を `true` にすると `start-chromium.sh` が次の**固定のフラグ列**を付けて起動し、SwiftShader（Vulkan）で WebGL2 が有効になる（2026-09-06 に Google Chrome 152 で実測。renderer は `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero)))`。実測の詳細は https://github.com/bannzai/castle/issues/891 のコメント）。
+
+```text
+--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader
+```
+
+- **任意のフラグ文字列を受ける input にはしない**。`--remote-debugging-address=0.0.0.0` のように CDP を tailnet の外へ露出させるフラグを渡せてしまい、「公開エンドポイントゼロ」が caller の input ひとつで崩れる。真偽値 input にして、付くフラグは runner スクリプトの固定リストだけにする（「リポジトリ公開に耐える安全性」の 14。「クライアントから受けた本文を runner で実行する経路を作らない」と同じ判断）
+- **`--ignore-gpu-blocklist` は付けない**。spike で有無を比較し、無くても起動した（不要なフラグで挙動の差を増やさない）
+- **`--headless=new` の自動フォールバックには頼らない**。Chrome 152 の headless は SwiftShader へ自動フォールバックして WebGL2 が動くが、chrome ログに `Automatic fallback to software WebGL has been deprecated. Please use the --enable-unsafe-swiftshader flag` が出る。将来止まる前提で、headed でも headless でも明示フラグにする
+- **既定は `false`**。通常の Web アプリの動作確認には WebGL2 が要らず、SwiftShader の描画は CPU を使う。WebGL2 が要るセッションだけが有効にする。`true` / `false` 以外の値は表記ゆれで黙って無効に倒れないよう入力検証で失敗させる
+- 有効にしたセッションはステップサマリに「ソフトウェア WebGL（SwiftShader）: 有効」と出る。ページ側での確認は `!!document.createElement("canvas").getContext("webgl2")` が `true` を返すこと
 
 ### 自己検証用のサンプル Web アプリ（webProject）
 
@@ -198,6 +213,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 11. **caller のコマンドへ OIDC 発行能力を渡さないハードリング（完全な隔離ではない）**: `session.yml` の job は Tailscale 認証に `id-token: write` を持つため、`setup_command` / `start_command`（依存パッケージの install script を含む）が OIDC トークンを発行できると、tag:ci の auth key を mint できてしまう。`start-dev-server.sh` は caller のコマンドを (a) `ACTIONS_ID_TOKEN_REQUEST_*` を外し、(b) `GITHUB_ENV` / `GITHUB_PATH` / `GITHUB_OUTPUT` / `GITHUB_STATE` を使い捨てファイルへ向けた env で実行し、現ステップでの発行と後続ステップへの環境注入（`BASH_ENV` 等）の両経路を塞ぐ。**ただし同一 VM・`sudo` NOPASSWD のため完全な隔離ではない**（悪意ある caller は別 step のプロセスを覗く等で回避しうる）。残存リスクを受け入れられるのは次の多層防御による: mint できるのは tag:ci の auth key のみ / tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。完全分離は別 job かコンテナ隔離が要るが、dev サーバは session job と同じ runner の localhost で動かす必要があり（tailnet に出さないため）今回は採らない
 12. **セッションに持ち込む認証情報を漏らさない**: base64 単一行の secret + `add-mask`、ログイン操作を録画開始前に済ませる順序、開発環境用アカウント限定の運用で担保する（「ログイン済み状態でのセッション開始」の「認証情報を Actions のログ・artifact に残さないための設計」）
 13. **tailnet の実 IP を run のログ・サマリに出さない**: public リポジトリの run のログ・ステップサマリは誰でも読める。到達には tailnet への参加が要るため IP 単体で侵入できるわけではないが、環境固有情報を公開しない原則をログにも適用する。接続先の IP はローカルの `webtunnel cdp <session>` が `tailscale status` から引くため、runner 側が出力する必要はない（`session.yml` のセッション情報出力と `bridge.sh` の両方が対象）
+14. **Chromium の起動フラグは caller から受けない**: 起動フラグを任意の文字列で受ける input を作ると、`--remote-debugging-address=0.0.0.0` で CDP を tailnet の外へ露出させる等、1 の「公開エンドポイントゼロ」を caller の input ひとつで崩せる。起動オプションは `software_webgl` のような真偽値 input にし、付くフラグは `start-chromium.sh` の固定リスト（`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`）だけにする（「ソフトウェア WebGL（SwiftShader）」）。11 の「クライアントから受けた本文を runner で実行する経路を作らない」と同じ判断
 
 ### 各アプリ repo での実行（reusable workflow）
 
@@ -208,7 +224,7 @@ GitHub の Additional Product Terms は、GitHub-hosted runner の用途を「wo
 - 起動するプロジェクトは input で渡す（「dev サーバの起動」参照）。`working_directory` は caller リポジトリルート相対
 - caller repo の visibility（public / private）は問わず、preflight でも確認しない。「リポジトリは public で運用する」（「リポジトリ公開に耐える安全性」）は webtunnel リポジトリ自身の方針であり、caller repo の visibility は独立
 
-caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）。`local/webtunnel` は `--start-url` / `--no-record` / `--no-preview` を対応する input の `-f` として送り、**caller 側で未宣言の input を送ると dispatch 自体が拒否される**ため、CLI の全オプションを使えるよう任意 input もパススルーで宣言しておく:
+caller workflow の例（アプリ repo の `.github/workflows/browser-session.yml`）。`local/webtunnel` は `--start-url` / `--no-record` / `--no-preview` / `--software-webgl` を対応する input の `-f` として送り、**caller 側で未宣言の input を送ると dispatch 自体が拒否される**ため、CLI の全オプションを使えるよう任意 input もパススルーで宣言しておく:
 
 ```yaml
 name: browser-session
@@ -237,6 +253,9 @@ on:
       setup_script:
         required: false
         default: ".webtunnel/setup.sh"
+      software_webgl:
+        required: false
+        default: "false" # WebGL2 が要るページ（Godot の Web エクスポート等）を開く時だけ up --software-webgl で true にする
 jobs:
   session:
     permissions:
@@ -250,6 +269,7 @@ jobs:
       record: ${{ inputs.record }}
       preview: ${{ inputs.preview }}
       setup_script: ${{ inputs.setup_script }}
+      software_webgl: ${{ inputs.software_webgl }}
       # 以下はアプリに合わせて固定値で書く（起動するのは常にこのプロジェクトのため）
       setup_command: npm ci
       start_command: npm run dev
@@ -296,10 +316,13 @@ webtunnel/
 ├── webProject/                       # 自己検証用のサンプル Web アプリ（Vite）
 ├── webExtension/                     # 自己検証用のサンプル Chrome 拡張（Manifest V3・popup のみ）
 ├── local/
-│   └── webtunnel                     # ローカル CLI: up / down / list / status / cdp / preview / screenshot / wait
+│   ├── webtunnel                     # ローカル CLI: up / down / list / status / cdp / preview / screenshot / wait
+│   └── test/test-webtunnel-up.sh     # up のオプションが workflow_dispatch の input に写ることの検証
 └── skills/                           # AI エージェント向け skill（Agent Skills 標準）
     ├── install.sh                    # skills/<name>/ をグローバル skill ディレクトリへ symlink 設置
     └── webtunnel/                    # 利用者（AI エージェント）の入口となる skill
+        └── references/
+            └── godot-web-export.md   # Godot の Web エクスポートを開く時の起動判定と座標の写し方
 ```
 
 ## セットアップ手順
@@ -383,6 +406,44 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 
 dev サーバが起動しない場合は run のログか artifact `dev-server-log-<session>` を見る。
 
+### Godot プロジェクトの例（Web エクスポートを開く）
+
+Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的サーバで配信して開く。Node は要らず、Python の `http.server` が `.wasm` を `application/wasm` で返す。caller 例から変えるのは次の 3 点で、`ready_path` は既定のままにする（実測は https://github.com/bannzai/castle/issues/891 のコメント。spike の workflow は https://github.com/bannzai/suicagamecopy/pull/16 ）:
+
+- `software_webgl: "true"` を固定値で渡す（Xvfb 上の Chromium は既定で WebGL2 が無効なため Godot が起動しない。「ソフトウェア WebGL（SwiftShader）」）
+- `setup_command` で Godot のバイナリと Web 用 export template を取得し、インポートと Web エクスポートを行う。export template は `.tpz`（zip）から必要なファイルだけ取り出す。Web のプリセットは `variant/thread_support=false` にする（`SharedArrayBuffer` を使わないため COOP / COEP ヘッダが不要になり、素の `http.server` で配信できる）
+- `start_command` は `python3 -m http.server "$PORT" --bind 127.0.0.1 --directory build/web`（127.0.0.1 に束縛しないと「dev サーバの起動」の loopback 検証で失敗する）
+- `ready_path` は既定の `/` のまま（ready 判定は HTTP ステータスを見ない listen 確認のため、`/index.html` を指定しても成果物の存在確認にはならない）。エクスポート成果物の存在は `setup_command` の末尾の `test -f` で検証する（無ければセットアップが失敗し、セッションは開かない）
+
+```yaml
+    with:
+      # ...（session / duration_minutes 等のパススルーは caller 例と同じ）
+      software_webgl: "true"
+      # Godot のリリース名とプリセット名はプロジェクトに合わせる（export_presets.cfg の name と一致させる）
+      setup_command: |
+        set -e # setup_command は bash -c で実行され、途中の失敗で止まらないため
+        GODOT_RELEASE=4.7-stable
+        GODOT_VERSION_DIR=4.7.stable
+        mkdir -p ~/godot-bin ~/.local/share/godot/export_templates/${GODOT_VERSION_DIR}
+        curl -sL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_linux.x86_64.zip"
+        unzip -q /tmp/godot.zip -d ~/godot-bin
+        curl -sL -o /tmp/templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_RELEASE}/Godot_v${GODOT_RELEASE}_export_templates.tpz"
+        unzip -q -o -j /tmp/templates.tpz templates/version.txt templates/web_nothreads_release.zip -d ~/.local/share/godot/export_templates/${GODOT_VERSION_DIR}
+        GODOT=~/godot-bin/Godot_v${GODOT_RELEASE}_linux.x86_64
+        "$GODOT" --headless --path . --import
+        mkdir -p build/web
+        "$GODOT" --headless --path . --export-release "Web" build/web/index.html
+        test -f build/web/index.html
+        test -f build/web/index.wasm
+        test -f build/web/index.pck
+      start_command: python3 -m http.server "$PORT" --bind 127.0.0.1 --directory build/web
+      port: "8080"
+```
+
+Godot の既定の HTML シェルでは、起動に成功すると `#status` 要素が DOM から消え、失敗すると `#status-notice` に理由が入る。agent-browser の `eval` でこの状態を見てから操作に入る。
+
+**座標の写し方**: Godot の canvas はブラウザのビューポート全体に広がり、プロジェクトの表示解像度（例: 1280x720）のアスペクト比を保って中央に描かれる。runner の Chromium のビューポートは 1280x656（1280x800 のウィンドウからブラウザ UI の 144 px を除いた高さ）で 16:9 ではないため、ゲーム座標をそのままクリック座標に使えない。canvas の `getBoundingClientRect()` からスケールとオフセットを計算してクリック座標へ写す（実測: 1280x720 基準の Start ボタン中心 (639, 430) → ブラウザ座標 (639, 392)）。写し方の JS と手順は webtunnel skill の `references/godot-web-export.md` に置く。ウィンドウ高さを 720 + 144 = 864 にしてビューポートを 1280x720 に揃えれば 1:1 になるが、ウィンドウサイズは `start-chromium.sh` の固定値で input ではないため、この方法は採っていない
+
 ## セッションのライフサイクル
 
 ```text
@@ -406,6 +467,8 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 - dev サーバ: `local/webtunnel up <session> --wait` だけでサンプルアプリ（webProject）が開いた状態になり、`agent-browser --cdp http://<IP>:9222 snapshot` にカウンタ・フォーム・非同期に読み込んだ一覧が日本語で出ること。ボタンをクリックするとカウンタの表示が変わること
 - ログイン済み状態: `--setup-script examples/auth-demo/setup.sh` で起動したセッションで、ローカルの agent-browser から `http://127.0.0.1:8123/` を開くとログインフォームではなく保護されたページが見えること
 - 認証情報の非露出: 同じ run の `gh run view <run-id> --log` と録画 artifact に、`WEBTUNNEL_AUTH_ENV` に入れたパスワードとログインフォームが現れないこと
+- CLI の up: `bash local/test/test-webtunnel-up.sh` が全 PASS すること（`--software-webgl` 等のオプションが input に写り、既定では未宣言の input を送らないこと）
+- ソフトウェア WebGL: `up <session> --software-webgl` のセッションで `agent-browser --cdp http://<IP>:9222 eval '!!document.createElement("canvas").getContext("webgl2")'` が `true` を返し、run のログ「Chromium を起動」に `software webgl: enabled` が出ること。既定のセッションでは同じ eval が `false` を返し、ログに `software webgl: disabled` が出ること
 
 ## 実装フェーズ
 
@@ -472,6 +535,21 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 
 - runner の Chromium は 1280x800 のウィンドウだが、ブラウザ UI を除いたビューポートは 1280x656 になる。録画（Xvfb の画面全体）は 1280x800、CDP のスクリーンショットは 1280x656
 - `npm ci` の結果はキャッシュしていない。依存の多いプロジェクトでは ready までが伸びる。必要になったら `actions/setup-node` の `cache: npm` を `working_directory` 込みで足す
+
+### ソフトウェア WebGL（SwiftShader）（完了: 2026-09-06）
+
+- `session.yml` の `software_webgl` input / `browser-session.yml` のパススルー / `local/webtunnel up --software-webgl` / `start-chromium.sh` の固定フラグ列
+- Godot プロジェクトの導入例（「新しいプロジェクトに webtunnel を導入する」）と skill の `references/godot-web-export.md`
+
+#### ソフトウェア WebGL 実測（2026-09-06 / ubuntu-latest / Google Chrome 152.0.7977.64 / `--no-sample-app` の about:blank）
+
+| セッション | `!!canvas.getContext("webgl2")` | `UNMASKED_RENDERER_WEBGL` |
+|---|---|---|
+| `up --software-webgl` | `true` | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| 既定 | `false` | （WebGL2 コンテキストが作れない） |
+
+- 既定のセッションでは run のログ「Chromium を起動」に `software webgl: disabled` だけが出て、SwiftShader のフラグは付かない
+- Godot の Web エクスポートを実際に開く検証は、caller を bannzai/suicagamecopy にして行う。同 repo の Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`。subject は immutable ID 形式）の登録待ち（ https://github.com/bannzai/suicagamecopy/issues/8 ）。runner 内で完結する部分（SwiftShader フラグ付きの headed Chromium で Godot が起動し、CDP のクリック・キー入力が効くこと）は spike で実測済み（ https://github.com/bannzai/castle/issues/891 ）
 
 ### Phase 3: 残り
 

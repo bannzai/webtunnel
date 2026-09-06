@@ -42,6 +42,10 @@ on:
         description: "読み込む Chrome 拡張（unpacked）のディレクトリ。空なら読み込まない。サンプル拡張は webExtension"
         required: false
         default: ""
+      software_webgl:
+        description: "ソフトウェア WebGL（SwiftShader）を有効にする。WebGL2 が要るページ（Godot の Web エクスポート等）を開く時だけ true"
+        required: false
+        default: "false"
 
 jobs:
   session:
@@ -63,6 +67,7 @@ jobs:
       setup_script: ${{ inputs.setup_script }}
       preview: ${{ inputs.preview }}
       extension_path: ${{ inputs.extension_path }}
+      software_webgl: ${{ inputs.software_webgl }}
     secrets:
       TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
