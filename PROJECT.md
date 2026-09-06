@@ -408,7 +408,7 @@ dev サーバが起動しない場合は run のログか artifact `dev-server-l
 
 ### Godot プロジェクトの例（Web エクスポートを開く）
 
-Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的サーバで配信して開く。Node は要らず、Python の `http.server` が `.wasm` を `application/wasm` で返す。caller 例との差分は次の 4 点（実測は https://github.com/bannzai/castle/issues/891 のコメント。spike の workflow は https://github.com/bannzai/suicagamecopy/pull/16 ）:
+Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的サーバで配信して開く。Node は要らず、Python の `http.server` が `.wasm` を `application/wasm` で返す。caller 例から変えるのは次の 3 点で、`ready_path` は既定のままにする（実測は https://github.com/bannzai/castle/issues/891 のコメント。spike の workflow は https://github.com/bannzai/suicagamecopy/pull/16 ）:
 
 - `software_webgl: "true"` を固定値で渡す（Xvfb 上の Chromium は既定で WebGL2 が無効なため Godot が起動しない。「ソフトウェア WebGL（SwiftShader）」）
 - `setup_command` で Godot のバイナリと Web 用 export template を取得し、インポートと Web エクスポートを行う。export template は `.tpz`（zip）から必要なファイルだけ取り出す。Web のプリセットは `variant/thread_support=false` にする（`SharedArrayBuffer` を使わないため COOP / COEP ヘッダが不要になり、素の `http.server` で配信できる）
