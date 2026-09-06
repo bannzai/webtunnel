@@ -24,3 +24,4 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 - preview: `local/webtunnel preview <session>` で開いた画面に CDP 操作がライブ映像として反映されること
 - 録画: セッション終了後に artifact `recording-<session>` から mp4 が取得できること
 - dev サーバ: `up <session> --wait` だけでサンプルアプリ（`webProject/`）が開き、agent-browser でボタンをクリックすると表示が変わること
+- ソフトウェア WebGL: `up <session> --software-webgl` のセッションで `agent-browser --cdp` の `eval '!!document.createElement("canvas").getContext("webgl2")'` が `true`、既定のセッションでは `false` を返すこと（参照: PROJECT.md「ソフトウェア WebGL（SwiftShader）」）
