@@ -55,6 +55,11 @@ on:
         type: string
         required: false
         default: ""
+      software_webgl:
+        description: "ソフトウェア WebGL（SwiftShader）を有効にして Chromium を起動する。WebGL2 が要るページ（Godot の Web エクスポート等）を開く時だけ true にする。付くフラグは固定（PROJECT.md「ソフトウェア WebGL（SwiftShader）」参照）"
+        type: string
+        required: false
+        default: "false"
       record:
         description: "セッション画面を録画して artifact に残す"
         type: string
@@ -111,9 +116,15 @@ jobs:
           START_URL: ${{ inputs.start_url }}
           START_COMMAND: ${{ inputs.start_command }}
           PORT: ${{ inputs.port }}
+          SOFTWARE_WEBGL: ${{ inputs.software_webgl }}
         run: |
           [[ "$SESSION" =~ ^[a-z0-9-]+$ ]] || {
             echo "session は小文字英数字とハイフンのみ許可: $SESSION" >&2
+            exit 1
+          }
+          # 表記ゆれ（True / yes 等）を黙って「無効」に倒すと WebGL2 が要るセッションを誤検証するため、ここで落とす
+          [ "$SOFTWARE_WEBGL" = "true" ] || [ "$SOFTWARE_WEBGL" = "false" ] || {
+            echo "software_webgl は true / false のみ許可: $SOFTWARE_WEBGL" >&2
             exit 1
           }
           [[ "$PORT" =~ ^[0-9]+$ ]] && [ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || {
@@ -188,6 +199,7 @@ jobs:
         timeout-minutes: 10
         env:
           EXTENSION_PATH: ${{ inputs.extension_path }}
+          SOFTWARE_WEBGL: ${{ inputs.software_webgl }}
         run: ./.webtunnel-runner/runner/start-chromium.sh
 
       # 録画開始・tailnet 参加より前に置く。ログイン操作を録画に写さないための順序であり、
@@ -234,6 +246,7 @@ jobs:
         env:
           SESSION: ${{ inputs.session }}
           PREVIEW: ${{ inputs.preview }}
+          SOFTWARE_WEBGL: ${{ inputs.software_webgl }}
         # tailnet の実 IP は出力しない。public リポジトリでは run のログ・サマリを誰でも読めるため
         # （参照: PROJECT.md「リポジトリ公開に耐える安全性」）。接続先の IP はローカルの
         # `webtunnel cdp <session>` が tailscale status から引く
@@ -247,6 +260,9 @@ jobs:
             echo "- Chromium が開いた URL: \`${START_URL}\`"
             if [ -n "${WEBTUNNEL_EXTENSION_ID:-}" ]; then
               echo "- 読み込んだ拡張: \`chrome-extension://${WEBTUNNEL_EXTENSION_ID}/\`（popup は \`popup.html\` 等の manifest 記載のパス）"
+            fi
+            if [ "$SOFTWARE_WEBGL" = "true" ]; then
+              echo "- ソフトウェア WebGL（SwiftShader）: 有効"
             fi
             if [ "$PREVIEW" = "true" ]; then
               echo "- preview: \`webtunnel preview ${SESSION}\`"
