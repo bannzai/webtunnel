@@ -413,7 +413,7 @@ Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的
 - `software_webgl: "true"` を固定値で渡す（Xvfb 上の Chromium は既定で WebGL2 が無効なため Godot が起動しない。「ソフトウェア WebGL（SwiftShader）」）
 - `setup_command` で Godot のバイナリと Web 用 export template を取得し、インポートと Web エクスポートを行う。export template は `.tpz`（zip）から必要なファイルだけ取り出す。Web のプリセットは `variant/thread_support=false` にする（`SharedArrayBuffer` を使わないため COOP / COEP ヘッダが不要になり、素の `http.server` で配信できる）
 - `start_command` は `python3 -m http.server "$PORT" --bind 127.0.0.1 --directory build/web`（127.0.0.1 に束縛しないと「dev サーバの起動」の loopback 検証で失敗する）
-- `ready_path` は `/index.html`（`http.server` はディレクトリ一覧も返すため `/` でも通るが、エクスポート成果物の存在を ready 判定に含める）
+- `ready_path` は既定の `/` のまま（ready 判定は HTTP ステータスを見ない listen 確認のため、`/index.html` を指定しても成果物の存在確認にはならない）。エクスポート成果物の存在は `setup_command` の末尾の `test -f` で検証する（無ければセットアップが失敗し、セッションは開かない）
 
 ```yaml
     with:
@@ -421,6 +421,7 @@ Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的
       software_webgl: "true"
       # Godot のリリース名とプリセット名はプロジェクトに合わせる（export_presets.cfg の name と一致させる）
       setup_command: |
+        set -e # setup_command は bash -c で実行され、途中の失敗で止まらないため
         GODOT_RELEASE=4.7-stable
         GODOT_VERSION_DIR=4.7.stable
         mkdir -p ~/godot-bin ~/.local/share/godot/export_templates/${GODOT_VERSION_DIR}
@@ -432,9 +433,11 @@ Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的
         "$GODOT" --headless --path . --import
         mkdir -p build/web
         "$GODOT" --headless --path . --export-release "Web" build/web/index.html
+        test -f build/web/index.html
+        test -f build/web/index.wasm
+        test -f build/web/index.pck
       start_command: python3 -m http.server "$PORT" --bind 127.0.0.1 --directory build/web
       port: "8080"
-      ready_path: /index.html
 ```
 
 Godot の既定の HTML シェルでは、起動に成功すると `#status` 要素が DOM から消え、失敗すると `#status-notice` に理由が入る。agent-browser の `eval` でこの状態を見てから操作に入る。
