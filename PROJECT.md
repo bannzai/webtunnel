@@ -533,6 +533,21 @@ Godot の既定の HTML シェルでは、起動に成功すると `#status` 要
 - runner の Chromium は 1280x800 のウィンドウだが、ブラウザ UI を除いたビューポートは 1280x656 になる。録画（Xvfb の画面全体）は 1280x800、CDP のスクリーンショットは 1280x656
 - `npm ci` の結果はキャッシュしていない。依存の多いプロジェクトでは ready までが伸びる。必要になったら `actions/setup-node` の `cache: npm` を `working_directory` 込みで足す
 
+### ソフトウェア WebGL（SwiftShader）（完了: 2026-09-06）
+
+- `session.yml` の `software_webgl` input / `browser-session.yml` のパススルー / `local/webtunnel up --software-webgl` / `start-chromium.sh` の固定フラグ列
+- Godot プロジェクトの導入例（「新しいプロジェクトに webtunnel を導入する」）と skill の `references/godot-web-export.md`
+
+#### ソフトウェア WebGL 実測（2026-09-06 / ubuntu-latest / Google Chrome 152.0.7977.64 / `--no-sample-app` の about:blank）
+
+| セッション | `!!canvas.getContext("webgl2")` | `UNMASKED_RENDERER_WEBGL` |
+|---|---|---|
+| `up --software-webgl` | `true` | `ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)` |
+| 既定 | `false` | （WebGL2 コンテキストが作れない） |
+
+- 既定のセッションでは run のログ「Chromium を起動」に `software webgl: disabled` だけが出て、SwiftShader のフラグは付かない
+- Godot の Web エクスポートを実際に開く検証は、caller を bannzai/suicagamecopy にして行う。同 repo の Secrets（`TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE`。subject は immutable ID 形式）の登録待ち（ https://github.com/bannzai/suicagamecopy/issues/8 ）。runner 内で完結する部分（SwiftShader フラグ付きの headed Chromium で Godot が起動し、CDP のクリック・キー入力が効くこと）は spike で実測済み（ https://github.com/bannzai/castle/issues/891 ）
+
 ### Phase 3: 残り
 
 - 実アプリ repo への caller workflow 展開（trust credential の subject 確認と Secrets 登録が repo ごとに要る）
