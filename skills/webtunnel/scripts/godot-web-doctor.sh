@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# Godot の Web エクスポートを webtunnel で開いた時、どの段階まで通っているかを順に判定する (期限付き)。
+# 「撮影が数分応答しない」「接続拒否」「起動していない」を 1 つの失敗にまとめず、段階名で切り分ける。
+#
+# 段階 (この順に判定し、失敗した段階で止まる):
+#   runner   caller repo の browser-session workflow に、このセッションの in_progress / queued な run がある
+#            (GitHub API の失敗は「run が無い」と区別して報告する)
+#   cdp      CDP の /json/version が応答する
+#   http     runner 上の配信 HTTP に到達できる (Chromium の中から fetch する。配信サーバは runner の 127.0.0.1 に
+#            束縛され tailnet へは露出しないため、ローカルから直接は叩けない。issue の並び「HTTP → CDP」を
+#            「CDP → HTTP」に入れ替えているのはこのため)
+#   loaded   ページが開いていて Godot 既定シェルの #status が消えている (起動完了)。#status-notice に理由が入れば
+#            その文字列を出す
+#   webgl2   ページ側から見て WebGL2 が有効 (無効なら up --software-webgl の付け忘れ)
+#   shot     CDP の撮影が期限内に終わる (PNG。詰まれば JPEG に倒した結果を出す)
+#   input    キーを 1 回送ってページ側で keydown を受信できる (--skip-input で省略。up --wait 直後の自動実行は
+#            タイトル画面を進めないよう省略する)
+#
+# Usage: godot-web-doctor.sh [--session <session>] [--cdp <url>] [--url <index の URL>] [--port <port>]
+#                            [--game-size <WxH>] [--deadline <秒>] [--skip-input] [--key <Key>]
+#   --session   webtunnel のセッション名。runner 段階と CDP の解決に使う (WEBTUNNEL_REPO / WEBTUNNEL_WORKFLOW を参照)
+#   --cdp       CDP の URL を直接指定 (--session が無い場合、runner 段階は SKIP になる)
+#   --url       配信 index の URL。省略時は --port から http://localhost:<port>/index.html、--port も無ければ
+#               現在のページの URL (about:blank 以外)、それも無ければ caller workflow の port input を gh api で読む
+#   --deadline  全体の期限 (既定 180 秒)。各段階のタイムアウトは残り時間に収める
+#   --key       input 段階で送るキー (既定 Shift。単独では画面を進めにくい修飾キー)
+# Env:   WEBTUNNEL_REPO / WEBTUNNEL_WORKFLOW  runner 段階と port の解決に使う (local/webtunnel と同じ)
+#        GODOT_WEB_HELPER                     godot-web.sh のパス (テストでスタブに差し替える用)
+#        GODOT_WEB_DOCTOR_DIR                 shot 段階の保存先 (既定 ./tmp/godot-web-doctor)
+# Exit:  0=全段階 OK / 1=いずれかの段階で NG (FAILED_STAGE=<段階名> を出力) / 2=引数不正
+set -euo pipefail
+
+# symlink を辿って本スクリプト自身が置かれた実ディレクトリを返す
+resolve_script_dir() {
+  local path=$0 target
+  while [ -L "$path" ]; do
+    target=$(readlink "$path")
+    case "$target" in
+      /*) path=$target ;;
+      *) path=$(dirname "$path")/$target ;;
+    esac
+  done
+  (cd "$(dirname "$path")" && pwd -P)
+}
+
+SCRIPT_DIR=$(resolve_script_dir)
+HELPER="${GODOT_WEB_HELPER:-${SCRIPT_DIR}/godot-web.sh}"
+REPO="${WEBTUNNEL_REPO:-bannzai/webtunnel}"
+WORKFLOW="${WEBTUNNEL_WORKFLOW:-browser-session.yml}"
+
+SESSION=""
+CDP=""
+URL=""
+PORT=""
+GAME_SIZE="${GODOT_WEB_GAME_SIZE:-1280x720}"
+DEADLINE=180
+SKIP_INPUT=0
+KEY="Shift"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --session) SESSION=$2; shift 2 ;;
+    --cdp) CDP=$2; shift 2 ;;
+    --url) URL=$2; shift 2 ;;
+    --port) PORT=$2; shift 2 ;;
+    --game-size) GAME_SIZE=$2; shift 2 ;;
+    --deadline) DEADLINE=$2; shift 2 ;;
+    --skip-input) SKIP_INPUT=1; shift ;;
+    --key) KEY=$2; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) echo "不明なオプション: $1" >&2; exit 2 ;;
+  esac
+done
+[ -n "$SESSION" ] || [ -n "$CDP" ] || { echo "--session <session> か --cdp <url> のどちらかが必要" >&2; exit 2; }
+case "$DEADLINE" in
+  ''|*[!0-9]*) echo "--deadline は秒数 (整数): $DEADLINE" >&2; exit 2 ;;
+esac
+
+START=$(date +%s)
+END=$((START + DEADLINE))
+
+ok()   { printf 'OK   %s: %s\n' "$1" "$2"; }
+skip() { printf 'SKIP %s: %s\n' "$1" "$2"; }
+fail() {
+  printf 'NG   %s: %s\n' "$1" "$2"
+  echo ""
+  echo "FAILED_STAGE=$1"
+  exit 1
+}
+
+# 残り時間 (秒)。0 以下なら期限切れとして失敗する
+remaining() {
+  local now
+  now=$(date +%s)
+  echo $((END - now))
+}
+require_time() {
+  local stage=$1
+  if [ "$(remaining)" -le 0 ]; then
+    fail "$stage" "期限 ${DEADLINE} 秒を使い切った (--deadline で延ばせる)"
+  fi
+}
+# 残り時間に収めた ms のタイムアウト (上限 cap 秒)
+stage_timeout_ms() {
+  local cap=$1 rem
+  rem=$(remaining)
+  [ "$rem" -lt "$cap" ] && cap=$rem
+  [ "$cap" -lt 1 ] && cap=1
+  echo $((cap * 1000))
+}
+
+helper() {
+  bash "$HELPER" --cdp "$CDP" --game-size "$GAME_SIZE" --timeout "$(stage_timeout_ms 60)" "$@"
+}
+
+echo "== godot-web doctor: session=${SESSION:-"(--cdp 直接)"} repo=${REPO} deadline=${DEADLINE}s =="
+
+# --- runner ---------------------------------------------------------------
+if [ -n "$SESSION" ]; then
+  require_time runner
+  if runs=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --json databaseId,status,displayTitle \
+      --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${SESSION} \")) | \"\(.databaseId) \(.status)\"" 2>&1); then
+    if [ -n "$runs" ]; then
+      ok runner "run $(printf '%s' "$runs" | head -1) (${REPO} / ${WORKFLOW})"
+    else
+      fail runner "セッション ${SESSION} の in_progress / queued な run が無い (期限切れか down 済み。gh run list -R ${REPO} -w ${WORKFLOW} で履歴を確認し、再度 up する)"
+    fi
+  else
+    fail runner "GitHub API に到達できない (run が無いのではなく取得の失敗。一時エラーなら再実行する): ${runs}"
+  fi
+else
+  skip runner "--cdp 直接指定のため run の確認を省略"
+fi
+
+# --- cdp ------------------------------------------------------------------
+require_time cdp
+if [ -z "$CDP" ]; then
+  if cdp_out=$(bash "${SCRIPT_DIR}/webtunnel-cli.sh" cdp "$SESSION" 2>&1); then
+    CDP=$(printf '%s\n' "$cdp_out" | awk '/^CDP: / {print $2; exit}')
+  fi
+  [ -n "$CDP" ] || fail cdp "webtunnel-${SESSION} が tailnet に無い (準備中か run の終了。webtunnel-cli.sh status ${SESSION} で確認): ${cdp_out:-}"
+fi
+if version=$(curl -s -m 10 "${CDP}/json/version" 2>&1) && printf '%s' "$version" | grep -q '"Browser"'; then
+  ok cdp "${CDP} ($(printf '%s' "$version" | grep -o '"Browser": *"[^"]*"' | head -1))"
+else
+  fail cdp "${CDP}/json/version が応答しない (run を作り直すと tailscale IP が変わる。webtunnel-cli.sh cdp ${SESSION:-<session>} で引き直す): ${version:-}"
+fi
+
+# --- http -----------------------------------------------------------------
+require_time http
+status_json=$(helper status 2>&1) || fail http "CDP には繋がるがページの状態を取得できない: ${status_json}"
+current_href=$(printf '%s' "$status_json" | jq -r '.href // ""')
+if [ -z "$URL" ]; then
+  if [ -n "$PORT" ]; then
+    URL="http://localhost:${PORT}/index.html"
+  elif [ -n "$current_href" ] && [ "$current_href" != "about:blank" ] && printf '%s' "$current_href" | grep -q '^https\?://'; then
+    URL=$current_href
+  elif [ -n "$SESSION" ]; then
+    # caller workflow の port input を読む (references/godot-web-export.md「配信ポートの確認」と同じ手順)
+    if PORT=$(gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | sed -n 's/^[[:space:]]*port:[[:space:]]*"\{0,1\}\([0-9]\{1,5\}\)"\{0,1\}.*/\1/p' | head -1) && [ -n "$PORT" ]; then
+      URL="http://localhost:${PORT}/index.html"
+    fi
+  fi
+fi
+[ -n "$URL" ] || fail http "配信 URL を決められない。--url か --port を指定する (port は caller workflow ${WORKFLOW} の port input)"
+# 配信 URL をすでに開いていれば同一オリジンの fetch で (ページ遷移せずゲームの進行を巻き戻さない)、
+# まだなら open してメインドキュメントの HTTP ステータスで到達を判定する (about:blank からの fetch は
+# オリジンが null で CORS に阻まれるため使わない)
+url_origin=$(printf '%s' "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
+case "$current_href" in
+  "${url_origin}"*) http_out=$(helper fetch-status "$URL" 2>&1) ;;
+  *) http_out=$(helper open "$URL" 2>&1) ;;
+esac || fail http "${URL} に runner の Chromium から到達できない (${http_out})。ポートは caller workflow ${WORKFLOW} の port input を読む (references/godot-web-export.md「配信ポートの確認」)。配信サーバが起動していなければ run のログ・artifact dev-server-log-<session> を見る"
+http_code=$(printf '%s' "$http_out" | jq -r '.status')
+case "$http_code" in
+  2*|3*) ok http "${URL} -> HTTP ${http_code}" ;;
+  *) fail http "${URL} は到達できるが HTTP ${http_code} (エクスポート成果物が無い。setup_command のエクスポート失敗なら run のログを見る)" ;;
+esac
+
+# --- loaded ---------------------------------------------------------------
+require_time loaded
+loaded_out=$(helper wait-started --timeout "$(stage_timeout_ms 60)" 2>&1) || fail loaded "${loaded_out}"
+ok loaded "#status が消えた (Godot 起動完了): $(printf '%s' "$loaded_out" | jq -c '{href, viewport, canvas}')"
+
+# --- webgl2 ---------------------------------------------------------------
+require_time webgl2
+if [ "$(printf '%s' "$loaded_out" | jq -r '.webgl2')" = "true" ]; then
+  ok webgl2 "ページ側から WebGL2 が有効"
+else
+  fail webgl2 "ページ側から WebGL2 が無効。up <session> --software-webgl で起動し直す (caller workflow が software_webgl input を宣言していること)"
+fi
+
+# --- shot -----------------------------------------------------------------
+require_time shot
+shot_dir="${GODOT_WEB_DOCTOR_DIR:-./tmp/godot-web-doctor}"
+mkdir -p "$shot_dir"
+shot_out=$(helper shot "${shot_dir}/doctor-$(date +%H%M%S).png" --timeout "$(stage_timeout_ms 60)" 2>&1) || fail shot "撮影が期限内に終わらない (PNG も JPEG も失敗): ${shot_out}"
+ok shot "$(printf '%s' "$shot_out" | jq -r '"\(.format) \(.bytes) bytes \(.path)" + (if .fallback then " (PNG がタイムアウトし JPEG に倒した)" else "" end)')"
+
+# --- input ----------------------------------------------------------------
+if [ "$SKIP_INPUT" -eq 1 ]; then
+  skip input "--skip-input"
+else
+  require_time input
+  input_out=$(helper probe-input "$KEY" --timeout "$(stage_timeout_ms 10)" 2>&1) || fail input "キー ${KEY} を送ってもページが keydown を受信しない (canvas のフォーカス・CDP の Input が届いているかを確認): ${input_out}"
+  ok input "$(printf '%s' "$input_out" | jq -c '{sent, got: {key: .got.key, code: .got.code}}')"
+fi
+
+echo ""
+echo "ALL_OK ($(( $(date +%s) - START )) 秒)"
