@@ -321,8 +321,13 @@ webtunnel/
 └── skills/                           # AI エージェント向け skill（Agent Skills 標準）
     ├── install.sh                    # skills/<name>/ をグローバル skill ディレクトリへ symlink 設置
     └── webtunnel/                    # 利用者（AI エージェント）の入口となる skill
+        ├── scripts/
+        │   ├── godot-web.sh          # Godot 用の操作ヘルパ（座標変換クリック・Control 名クリック・ms 指定の長押し・seq・JPEG フォールバック撮影）
+        │   ├── godot-web-cdp.mjs     # godot-web.sh の実体（Node 22、CDP に直接 WebSocket 接続。依存パッケージなし）
+        │   └── godot-web-doctor.sh   # runner → CDP → 配信 HTTP → 起動完了 → WebGL2 → 撮影 → 実入力 の段階別診断（up --wait --software-webgl 後に自動で 1 回）
         └── references/
-            └── godot-web-export.md   # Godot の Web エクスポートを開く時の起動判定と座標の写し方
+            ├── godot-web-export.md   # Godot の Web エクスポートを開く時の接続情報・起動判定・座標とキーの扱い・セッションの再開
+            └── godot_web_diag.gd     # click-node 用に Control のグローバル矩形を返す Godot 側の診断 autoload
 ```
 
 ## セットアップ手順
@@ -442,7 +447,9 @@ Godot 4 のプロジェクトは、Web エクスポートを runner 上の静的
 
 Godot の既定の HTML シェルでは、起動に成功すると `#status` 要素が DOM から消え、失敗すると `#status-notice` に理由が入る。agent-browser の `eval` でこの状態を見てから操作に入る。
 
-**座標の写し方**: Godot の canvas はブラウザのビューポート全体に広がり、プロジェクトの表示解像度（例: 1280x720）のアスペクト比を保って中央に描かれる。runner の Chromium のビューポートは 1280x656（1280x800 のウィンドウからブラウザ UI の 144 px を除いた高さ）で 16:9 ではないため、ゲーム座標をそのままクリック座標に使えない。canvas の `getBoundingClientRect()` からスケールとオフセットを計算してクリック座標へ写す（実測: 1280x720 基準の Start ボタン中心 (639, 430) → ブラウザ座標 (639, 392)）。写し方の JS と手順は webtunnel skill の `references/godot-web-export.md` に置く。ウィンドウ高さを 720 + 144 = 864 にしてビューポートを 1280x720 に揃えれば 1:1 になるが、ウィンドウサイズは `start-chromium.sh` の固定値で input ではないため、この方法は採っていない
+**座標の写し方**: Godot の canvas はブラウザのビューポート全体に広がり、プロジェクトの表示解像度（例: 1280x720）のアスペクト比を保って中央に描かれる。runner の Chromium のビューポートは 1280x656（1280x800 のウィンドウからブラウザ UI の 144 px を除いた高さ）で 16:9 ではないため、ゲーム座標をそのままクリック座標に使えない。canvas の `getBoundingClientRect()` からスケールとオフセットを計算してクリック座標へ写す（実測: 1280x720 基準の Start ボタン中心 (639, 430) → ブラウザ座標 (639, 392)）。変換は webtunnel skill の `scripts/godot-web.sh click` が行い、手順は `references/godot-web-export.md` に置く。ウィンドウ高さを 720 + 144 = 864 にしてビューポートを 1280x720 に揃えれば 1:1 になるが、ウィンドウサイズは `start-chromium.sh` の固定値で input ではないため、この方法は採っていない
+
+**Godot 用の操作ヘルパと段階別診断（skill 側）**: 21 ゲームの実操作（ https://github.com/bannzai/castle/issues/952 ）で、座標変換・ms 指定の長押し・撮影の JPEG フォールバック・段階別の切り分けを毎回自作していたため、skill の `scripts/godot-web.sh`（実体 `godot-web-cdp.mjs`）と `scripts/godot-web-doctor.sh` にまとめた。agent-browser を経由せず CDP に直接 WebSocket 接続するのは、keydown の応答を待たずに送信時刻から押下時間を数える（リモートの往復時間を押下時間に加算しない）ためと、PNG の転送が詰まった時に撮影をタイムアウトさせて JPEG に倒すため。Node 22 の global WebSocket を使い依存パッケージを持たない。`local/webtunnel up --wait --software-webgl` は ready 後に doctor を 1 回走らせる（実入力の段階は省略。`WEBTUNNEL_NO_DOCTOR=1` で省略）。診断の段階順で「配信 HTTP」を CDP の後に置くのは、配信サーバが runner の 127.0.0.1 に束縛され tailnet へ露出しないため、到達確認を Chromium の中から行う必要があるため。詳細は各スクリプトのヘッダーコメントと `references/godot-web-export.md`
 
 ## セッションのライフサイクル
 

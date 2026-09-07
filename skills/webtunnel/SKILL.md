@@ -13,9 +13,15 @@ allowed-tools:
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/preflight.sh:*)
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.sh:*)
   - Bash(WEBTUNNEL_REPO=* bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.sh:*)
+  - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/godot-web.sh:*)
+  - Bash(GODOT_WEB_GAME_SIZE=* bash ${CLAUDE_SKILL_DIR}/scripts/godot-web.sh:*)
+  - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/godot-web-doctor.sh:*)
+  - Bash(WEBTUNNEL_REPO=* bash ${CLAUDE_SKILL_DIR}/scripts/godot-web-doctor.sh:*)
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/test/test-webtunnel-cli.sh:*)
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/test/test-preflight.sh:*)
   - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/test/test-fetch-recording.sh:*)
+  - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/test/test-godot-web.sh:*)
+  - Bash(bash ${CLAUDE_SKILL_DIR}/scripts/test/test-godot-web-doctor.sh:*)
   - Bash(agent-browser:*)
   - Bash(gh run list:*)
   - Bash(gh run view:*)
@@ -43,8 +49,11 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 - `scripts/webtunnel-cli.sh` — `local/webtunnel` CLI を、skill の設置場所（symlink 経由を含む）に依存せず呼び出すラッパー
 - `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・tailnet 接続・caller workflow・Secrets）を集めて READY / NOT_READY を返す。あわせて対象 repo の OIDC subject 接頭辞とその形式、trust credential に設定すべき Subject を `oidc-subject` の行に表示する（Subject の一致は API で判定できないため、人が突き合わせる材料として出す）
 - `scripts/fetch-recording.sh` — セッション名から workflow run を特定して録画 artifact をダウンロードする
-- `scripts/test/test-webtunnel-cli.sh` / `test-preflight.sh` / `test-fetch-recording.sh` — 各スクリプトの検証
-- `references/godot-web-export.md` — Godot の Web エクスポートを開く時の起動判定と、ゲーム座標をクリック座標に写す方法
+- `scripts/godot-web.sh` — Godot の Web エクスポート用の操作ヘルパ（実体は `godot-web-cdp.mjs`。Node 22 で CDP に直接接続）。ゲーム座標のクリック（`click`）、Control 名のクリック（`click-node`）、ms 指定の長押し（`key --hold`）、1 行 1 操作のシナリオ再生（`seq`）、JPEG フォールバック付きの撮影（`shot`）、起動判定（`wait-started` / `status`）。サブコマンドはスクリプトのヘッダーコメントを SSOT とする
+- `scripts/godot-web-doctor.sh` — Godot セッションの段階別診断。runner の run → CDP → 配信 HTTP → 起動完了（`#status` の消滅）→ WebGL2 → 撮影 → 実入力 の順に判定し、失敗した段階名（`FAILED_STAGE=`）を出す。期限付き
+- `scripts/test/test-webtunnel-cli.sh` / `test-preflight.sh` / `test-fetch-recording.sh` / `test-godot-web.sh` / `test-godot-web-doctor.sh` — 各スクリプトの検証（`test-godot-web.sh` は `scripts/test/fixtures/godot-shell-mock/` の Godot 既定シェルを模した雛形をローカルの headless Chromium で開く）
+- `references/godot-web-export.md` — Godot の Web エクスポートを開く時の接続情報（配信ポートの読み方）・起動判定・座標とキー（logical / physical）の扱い・撮影が返らない時・セッションの寿命と再開
+- `references/godot_web_diag.gd` — `click-node` 用に Control のグローバル矩形を返す Godot 側の診断 autoload（対象プロジェクトの Autoload に追加する）
 
 ## ワークフロー
 
@@ -101,7 +110,9 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh 
 
 #### WebGL2 が要るページ（Godot の Web エクスポート等）を開く
 
-runner の Chromium は既定で WebGL2 が無効のため、WebGL2 を要求するページは `up <session> --software-webgl` で起動する（SwiftShader によるソフトウェア WebGL。付くフラグは固定で、設計は PROJECT.md「ソフトウェア WebGL（SwiftShader）」）。Godot プロジェクトの caller workflow の書き方（Web エクスポートと静的サーバの起動）は PROJECT.md「新しいプロジェクトに webtunnel を導入する > Godot プロジェクトの例」、起動の判定とゲーム座標をクリック座標へ写す方法は `references/godot-web-export.md` を読む。
+runner の Chromium は既定で WebGL2 が無効のため、WebGL2 を要求するページは `up <session> --software-webgl --wait` で起動する（SwiftShader によるソフトウェア WebGL。付くフラグは固定で、設計は PROJECT.md「ソフトウェア WebGL（SwiftShader）」）。`--wait` と併用すると ready の直後に `scripts/godot-web-doctor.sh` が 1 回走り、どの段階（runner / CDP / 配信 HTTP / 起動完了 / WebGL2 / 撮影）まで通ったかを表示する。Godot プロジェクトの caller workflow の書き方（Web エクスポートと静的サーバの起動）は PROJECT.md「新しいプロジェクトに webtunnel を導入する > Godot プロジェクトの例」を読む。**操作に入る前に `references/godot-web-export.md` を読む**（配信ポートは caller workflow の `port` input から読む、キーは `godot-web.sh` で送る、等の躓きどころをまとめてある）。
+
+Godot の操作は `scripts/godot-web.sh --session <session> <サブコマンド>` で行う（ゲーム座標のクリック・Control 名のクリック・ms 指定の長押し・シナリオ再生・撮影。サブコマンドはスクリプトのヘッダーコメント）。agent-browser は同じ CDP に並行して接続してよい。撮影が返らない・入力が効かない時は `scripts/godot-web-doctor.sh --session <session>` で段階を切り分ける。
 
 #### Chrome 拡張を読み込んだ状態で確認する
 
@@ -158,7 +169,8 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.s
 
 ## 制約・ハマりどころ
 
-- run を作り直すと tailscale IP が変わる。繋がらなくなったら `cdp` で引き直す
+- run を作り直すと tailscale IP が変わる。繋がらなくなったら `cdp` で引き直す。agent-browser のデーモンは `--session` 名ごとに前回の CDP アドレスを保持するため、同じセッション名で接続し直す前に `agent-browser --session <name> close` でそのセッションだけ閉じる（`close --all` は他の worktree の作業を壊す）
+- セッションは `duration_minutes`（既定 60 分）で期限切れになる。`up` は操作の直前に行い、`up --wait` 中の「run が存在しない」と GitHub API の一時エラーは区別する（`local/webtunnel` は API の失敗を run 不在と判断せず待機を続ける）
 - 同名セッションを down せずに再 up すると、新しい run は前の run の終了までキューで待つ。作り直す時は先に down する
 - public repo では Actions のログと artifact（録画・スクリーンショット）が公開される
 
@@ -168,6 +180,7 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.s
 - `status` が応答しない（tailnet にホストが無い）→ セットアップ中か run の失敗。`gh run view <run-id> --log-failed -R <owner>/<repo>` でログを確認する
 - CDP には繋がるがページが表示されない → screenshot を Read して確認し、runner から到達できない URL を開いていないか確認する
 - Godot の Web エクスポートが `WebGL2 - Check web browser configuration and hardware support` で起動しない → `--software-webgl` を付けずに起動している。down して `up <session> --software-webgl` で起動し直す（`references/godot-web-export.md`）
+- Godot のセッションで接続拒否・撮影が返らない・キーが効かない → `scripts/godot-web-doctor.sh --session <session>` を実行し、`FAILED_STAGE=` の段階に対応する（接続拒否なら caller workflow の `port` input を読み直す。撮影は `godot-web.sh shot --jpeg`。矢印キーが別のキーとして届くなら `godot-web.sh key` で送る。`references/godot-web-export.md`）
 - `up` の run で「Tailscale に参加」が `token exchange failed with status 403` で失敗する → trust credential の Subject と caller repo の OIDC subject の不一致、または Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い。「caller workflow の整備」の 1（`gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq '.sub_claim_prefix'` で subject 接頭辞を確認する）に戻って接頭辞を突き合わせ、Secrets の値も確認する
 - `fetch-recording.sh` が「まだ実行中」と返す → 録画はセッション終了時にアップロードされるため、`down` の後に再実行する
 
@@ -175,4 +188,5 @@ WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/fetch-recording.s
 
 1. `bash ${CLAUDE_SKILL_DIR}/scripts/test/test-webtunnel-cli.sh` を実行し、CLI の解決（環境変数指定・リポジトリ内・symlink 経由）と異常系が全 PASS することを確認する。
 2. `bash ${CLAUDE_SKILL_DIR}/scripts/test/test-preflight.sh` と `bash ${CLAUDE_SKILL_DIR}/scripts/test/test-fetch-recording.sh` を実行し、READY / NOT_READY の判定と run 特定の分岐が全 PASS することを確認する。
-3. 実セッションでの疎通確認: `preflight.sh bannzai/webtunnel` が READY を返す → `webtunnel-cli.sh up <session> --wait` → `webtunnel-cli.sh status <session>` が HTTP 200 を返す → `agent-browser --cdp <URL> open <url>` と `screenshot` で PNG を取得し Read で描画されていることを確認 → `webtunnel-cli.sh down <session>` → `fetch-recording.sh <session> ./tmp` で mp4 を取得できることを確認する。
+3. `bash ${CLAUDE_SKILL_DIR}/scripts/test/test-godot-web.sh` を実行し、雛形（1280x720 のゲームを 1280x656 の canvas に表示）で `click 639 430` がゲーム座標のボタンに当たること、`key --hold 300` の keyup がページ側の時刻で 300 ± 50 ms に収まること、`click-node` / `seq` / `shot` / 起動失敗の判定が全 PASS することを確認する（ローカルの headless Chromium が要る。無ければ UNAVAILABLE で exit 2）。`bash ${CLAUDE_SKILL_DIR}/scripts/test/test-godot-web-doctor.sh` で、各段階の失敗が段階名付きで exit 非 0 になることを確認する。`local/test/test-webtunnel-up.sh` で `up --wait --software-webgl` 後の診断の自動実行と、待機中の GitHub API 失敗の扱いを確認する。
+4. 実セッションでの疎通確認: `preflight.sh bannzai/webtunnel` が READY を返す → `webtunnel-cli.sh up <session> --wait` → `webtunnel-cli.sh status <session>` が HTTP 200 を返す → `agent-browser --cdp <URL> open <url>` と `screenshot` で PNG を取得し Read で描画されていることを確認 → `webtunnel-cli.sh down <session>` → `fetch-recording.sh <session> ./tmp` で mp4 を取得できることを確認する。
