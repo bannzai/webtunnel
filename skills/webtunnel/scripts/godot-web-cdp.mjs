@@ -747,10 +747,12 @@ async function main() {
   }
 }
 
+// process.exit() は stdout への非同期書き込み (パイプ先が遅い時の大きな JSON) を待たずに終了して結果が
+// 途中で切れるため、exitCode を設定してイベントループの完了 (WebSocket は close 済み) で終わらせる
 main().then(
-  () => process.exit(0),
+  () => { process.exitCode = 0; },
   (e) => {
     process.stderr.write(`${e.message}\n`);
-    process.exit(e instanceof UsageError ? 2 : 1);
+    process.exitCode = e instanceof UsageError ? 2 : 1;
   },
 );
