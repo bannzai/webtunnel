@@ -177,7 +177,8 @@ echo "== godot-web doctor: session=${SESSION:-"(--cdp 直接)"} repo=${REPO} dea
 # --- runner ---------------------------------------------------------------
 if [ -n "$SESSION" ]; then
   require_time runner
-  if runs=$(with_deadline gh run list -R "$REPO" --workflow "$WORKFLOW" --json databaseId,status,displayTitle \
+  # 既定の取得件数 (20 件) だと、対象より新しい run が多い時に稼働中のセッションを不在と誤判定するため広く取る
+  if runs=$(with_deadline gh run list -R "$REPO" --workflow "$WORKFLOW" -L 200 --json databaseId,status,displayTitle \
       --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${SESSION} \")) | \"\(.databaseId) \(.status)\""); then
     if [ -n "$runs" ]; then
       ok runner "run $(printf '%s' "$runs" | head -1) (${REPO} / ${WORKFLOW})"

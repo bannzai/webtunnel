@@ -5,7 +5,7 @@
 # スタブの挙動は環境変数で変える:
 #   GH_STUB_RUNS            gh run list が返す行（空なら run 無し）
 #   GH_STUB_FAIL=1          gh run list を exit 1 にする（GitHub API の失敗）
-#   GH_STUB_WORKFLOW_YAML   gh api contents/... が base64 で返す caller workflow の YAML
+#   GH_STUB_WORKFLOW_YAML   gh api contents/... が生で返す caller workflow の YAML
 #   CURL_STUB_OK=0          curl を exit 1 にする
 #   HELPER_STUB_FAIL=<sub>  godot-web.sh のそのサブコマンドを exit 1 にする
 #   HELPER_STUB_HREF        status が返す href（既定 about:blank）
@@ -55,7 +55,7 @@ mkdir -p "$STUB_BIN"
 
 cat > "${STUB_BIN}/gh" <<'EOF'
 #!/usr/bin/env bash
-# gh のスタブ。run list はセッションの run 一覧、api は caller workflow の YAML を base64 で返す
+# gh のスタブ。run list はセッションの run 一覧、api は caller workflow の YAML を生で返す
 case "${1:-}" in
   run)
     # GitHub API の失敗（run が無いのとは区別される）

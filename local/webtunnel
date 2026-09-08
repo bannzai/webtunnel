@@ -44,7 +44,8 @@ session_ip() {
 # 戻り値を見る)
 session_run_ids() {
   local session=$1 out
-  out=$(gh run list -R "$REPO" --workflow "$WORKFLOW" \
+  # 既定の取得件数 (20 件) だと、対象より新しい run が多い時に稼働中のセッションを不在と誤判定するため広く取る
+  out=$(gh run list -R "$REPO" --workflow "$WORKFLOW" -L 200 \
     --json databaseId,displayTitle,status \
     --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${session} \")) | .databaseId") || return 1
   printf '%s\n' "$out"
