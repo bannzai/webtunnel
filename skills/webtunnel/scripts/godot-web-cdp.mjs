@@ -159,6 +159,7 @@ class Cdp {
       }, timeout);
       this.pending.set(id, {
         method,
+        timer,
         resolve: (r) => {
           clearTimeout(timer);
           resolve(r);
@@ -188,6 +189,12 @@ class Cdp {
 
   close() {
     if (this.ws) this.ws.close();
+    // 応答待ちのタイマーが残っているとイベントループが満了まで維持されるため、閉じる時にまとめて解除する
+    // (Promise は reject しない。待ち手のいない reject は未処理の拒否として終了コードを変えてしまう)
+    for (const [id, p] of this.pending) {
+      clearTimeout(p.timer);
+      this.pending.delete(id);
+    }
   }
 }
 
@@ -384,8 +391,8 @@ async function screenshot(cdp, path, { jpeg = false, quality = 80, timeout } = {
     if (!/ms 以内に無い/.test(e.message)) throw e;
     process.stderr.write(`PNG の撮影が ${timeout} ms 以内に終わらないため別の接続で JPEG に切り替える\n`);
     const alt = new Cdp({ ...cdp.opts, targetId: cdp.targetId });
-    await alt.connect();
     try {
+      await alt.connect();
       const params = { format: "jpeg", quality };
       const r = await alt.send("Page.captureScreenshot", params, timeout);
       const buf = Buffer.from(r.data, "base64");
@@ -414,7 +421,16 @@ async function openUrl(cdp, url, timeout) {
   if (r.errorText) throw new Error(`open に失敗: ${url} (${r.errorText})`);
   // loaderId が無いのは同一ドキュメント内の遷移 (フラグメントだけ違う URL 等)。load は発生しないので待たない
   if (!r.loaderId) return { url, status: null, frameId, sameDocument: true };
-  await Promise.race([loaded, sleep(timeout).then(() => { throw new Error(`open の load が ${timeout} ms 以内に終わらない: ${url}`); })]);
+  // タイムアウトのタイマーは load 完了時に解除する (残すとイベントループが満了まで維持され、終了が遅れる)
+  let timer;
+  const timedOut = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`open の load が ${timeout} ms 以内に終わらない: ${url}`)), timeout);
+  });
+  try {
+    await Promise.race([loaded, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
   return { url, status, frameId };
 }
 
@@ -626,8 +642,9 @@ async function main() {
   if (!cmd) throw new UsageError("サブコマンドが無い");
 
   const cdp = new Cdp(opts);
-  await cdp.connect();
+  // connect の失敗 (WebSocket のタイムアウト・Runtime.enable の失敗) でもソケットを閉じるよう try の中で接続する
   try {
+    await cdp.connect();
     let out;
     switch (cmd) {
       case "open": {
