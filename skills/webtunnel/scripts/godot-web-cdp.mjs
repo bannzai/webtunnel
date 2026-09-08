@@ -90,12 +90,17 @@ class Cdp {
     }
     const pages = targets.filter((t) => t.type === "page");
     let target = pages[0];
-    if (this.opts.target) {
+    if (this.opts.targetId) {
+      // 再接続 (JPEG フォールバック等) は URL ではなくターゲット ID で同じページを掴む (open で URL が変わっても追える)
+      target = pages.find((t) => t.id === this.opts.targetId);
+      if (!target) throw new Error(`ターゲット ID ${this.opts.targetId} の page が無い (閉じられた): ${pages.map((p) => p.url).join(", ")}`);
+    } else if (this.opts.target) {
       target = pages.find((t) => (t.url || "").includes(this.opts.target));
       if (!target) throw new Error(`--target ${this.opts.target} に一致する page が無い: ${pages.map((p) => p.url).join(", ")}`);
     }
     if (!target) throw new Error("page ターゲットが無い");
     this.targetUrl = target.url;
+    this.targetId = target.id;
     await new Promise((resolve, reject) => {
       const ws = new WebSocket(target.webSocketDebuggerUrl);
       const timer = setTimeout(() => reject(new Error(`WebSocket 接続がタイムアウト: ${target.webSocketDebuggerUrl}`)), this.opts.timeout);
@@ -378,7 +383,7 @@ async function screenshot(cdp, path, { jpeg = false, quality = 80, timeout } = {
     // PNG のデータの後ろで待たされて復旧できない)
     if (!/ms 以内に無い/.test(e.message)) throw e;
     process.stderr.write(`PNG の撮影が ${timeout} ms 以内に終わらないため別の接続で JPEG に切り替える\n`);
-    const alt = new Cdp({ ...cdp.opts, target: cdp.opts.target || cdp.targetUrl });
+    const alt = new Cdp({ ...cdp.opts, targetId: cdp.targetId });
     await alt.connect();
     try {
       const params = { format: "jpeg", quality };
