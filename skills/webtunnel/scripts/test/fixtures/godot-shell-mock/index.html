@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>godot-shell-mock</title>
+<!--
+  Godot 4 の既定 HTML シェル (misc/dist/html/full-size.html) を模した検証用の雛形。
+  godot-web.sh のテスト (test-godot-web.sh) が headless Chromium で開く。Godot 本体・wasm は使わない。
+  再現している点:
+    - canvas#canvas がビューポート全体に広がり、ゲーム (既定 1280x720) はエンジン側の stretch (aspect keep) と同じく
+      canvas の内側にレターボックスで中央に描かれる (CSS ではなく描画側で余白を作る)
+    - 起動に成功すると #status を DOM から取り除く。?fail=<理由> で #status-notice に理由を入れて失敗させる
+    - 受け取ったクリック (ゲーム座標に逆変換してどのボタンに当たったか) とキー (key / code / 時刻) を
+      window.__mock に記録し、console にも出す
+    - references/godot_web_diag.gd と同じ window.__godotWebDiag の request / response プロトコル
+  クエリ: ?game=WxH (既定 1280x720) / ?fail=<理由> / ?boot=<ms> (起動までの時間。既定 300)
+-->
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #000; }
+  #canvas { display: block; outline: none; }
+  #status { position: absolute; left: 0; top: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-family: sans-serif; }
+  #status-notice { background: #333; border: 1px solid #666; padding: 8px; display: none; }
+</style>
+</head>
+<body>
+<canvas id="canvas">HTML5 canvas appears to be unsupported in the current browser.</canvas>
+<div id="status"><div id="status-progress">loading</div><div id="status-notice"></div></div>
+<script>
+(function () {
+  const q = new URLSearchParams(location.search);
+  const gm = /^(\d+)x(\d+)$/.exec(q.get("game") || "1280x720");
+  const GAME_W = Number(gm[1]);
+  const GAME_H = Number(gm[2]);
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  // ゲーム座標で定義した Control (名前 → 矩形)。click-node の問い合わせにも使う
+  const controls = {
+    start_button: { x: 539, y: 400, w: 200, h: 60 },
+    cell_1_2: { x: 40, y: 40, w: 80, h: 80 },
+    corner_button: { x: 1180, y: 660, w: 100, h: 60 },
+  };
+
+  const mock = { hits: [], keys: [], gameSize: { w: GAME_W, h: GAME_H }, started: false };
+  window.__mock = mock;
+  window.__godotWebDiag = { request: null, response: null };
+
+  // Godot のエンジン側と同じ写像 (aspect keep: 縮尺 min、中央寄せ)
+  function transform() {
+    const s = Math.min(canvas.width / GAME_W, canvas.height / GAME_H);
+    const ox = (canvas.width - GAME_W * s) / 2;
+    const oy = (canvas.height - GAME_H * s) / 2;
+    return { s, ox, oy };
+  }
+
+  function draw() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const { s, ox, oy } = transform();
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.scale(s, s);
+    ctx.fillStyle = "#245";
+    ctx.fillRect(0, 0, GAME_W, GAME_H);
+    for (const [name, r] of Object.entries(controls)) {
+      ctx.fillStyle = "#e94";
+      ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = "#000";
+      ctx.font = "20px sans-serif";
+      ctx.fillText(name, r.x + 8, r.y + 30);
+    }
+    ctx.restore();
+  }
+
+  function toGame(clientX, clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const { s, ox, oy } = transform();
+    return { x: (clientX - rect.left - ox) / s, y: (clientY - rect.top - oy) / s };
+  }
+
+  canvas.addEventListener("mousedown", (e) => {
+    const g = toGame(e.clientX, e.clientY);
+    let hit = null;
+    for (const [name, r] of Object.entries(controls)) {
+      if (g.x >= r.x && g.x <= r.x + r.w && g.y >= r.y && g.y <= r.y + r.h) hit = name;
+    }
+    const rec = { client: { x: e.clientX, y: e.clientY }, game: { x: Math.round(g.x), y: Math.round(g.y) }, button: hit, t: performance.now() };
+    mock.hits.push(rec);
+    console.log("[mock] click", JSON.stringify(rec));
+  });
+
+  window.addEventListener("keydown", (e) => {
+    const rec = { type: "keydown", key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shift: e.shiftKey, t: performance.now() };
+    mock.keys.push(rec);
+    console.log("[mock] keydown", e.key, e.code);
+  });
+  window.addEventListener("keyup", (e) => {
+    const rec = { type: "keyup", key: e.key, code: e.code, keyCode: e.keyCode, t: performance.now() };
+    mock.keys.push(rec);
+    console.log("[mock] keyup", e.key, e.code);
+  });
+
+  // godot_web_diag.gd と同じ: request を見つけたら Control の矩形を response に書く
+  function pollDiag() {
+    const d = window.__godotWebDiag;
+    if (d.request && !(d.response && d.response.id === d.request.id)) {
+      const r = controls[d.request.name];
+      d.response = r
+        ? { id: d.request.id, name: d.request.name, found: true, x: r.x, y: r.y, w: r.w, h: r.h }
+        : { id: d.request.id, name: d.request.name, found: false };
+    }
+    requestAnimationFrame(pollDiag);
+  }
+
+  window.addEventListener("resize", draw);
+  draw();
+  requestAnimationFrame(pollDiag);
+
+  const fail = q.get("fail");
+  const boot = Number(q.get("boot") || 300);
+  setTimeout(() => {
+    if (fail) {
+      const n = document.getElementById("status-notice");
+      n.textContent = fail;
+      n.style.display = "block";
+      document.getElementById("status-progress").remove();
+      console.error("[mock] boot failed:", fail);
+      return;
+    }
+    document.getElementById("status").remove();
+    mock.started = true;
+    canvas.focus();
+    console.log("[mock] started", GAME_W + "x" + GAME_H, "viewport", window.innerWidth + "x" + window.innerHeight);
+  }, boot);
+})();
+</script>
+</body>
+</html>

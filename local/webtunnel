@@ -3,7 +3,9 @@
 #
 # 使い方:
 #   webtunnel up <session> [--duration 60] [--start-url <url>] [--setup-script <path>] [--ref <branch>] [--no-record] [--no-preview] [--no-sample-app] [--software-webgl] [--wait]
-#     --software-webgl: ソフトウェア WebGL（SwiftShader）を有効にする。WebGL2 が要るページ（Godot の Web エクスポート等）用
+#     --software-webgl: ソフトウェア WebGL（SwiftShader）を有効にする。WebGL2 が要るページ（Godot の Web エクスポート等）用。
+#                       --wait と併用すると ready 後に Godot 向けの段階別診断 (skills/webtunnel/scripts/godot-web-doctor.sh)
+#                       を 1 回走らせて失敗段階を表示する（WEBTUNNEL_NO_DOCTOR=1 で省略）
 #   webtunnel down <session>
 #   webtunnel list
 #   webtunnel status <session>
@@ -37,12 +39,16 @@ session_ip() {
   "$(ts_bin)" status 2>/dev/null | awk -v h="webtunnel-${session}" '$2 == h {print $1; exit}'
 }
 
-# session 名に一致する実行中/待機中の run ID を列挙する
+# session 名に一致する実行中/待機中の run ID を列挙する。GitHub API の失敗 (一時エラー・レート制限) は
+# 「run が無い」と区別するため exit 1 で返す (呼び出し側が $(...) で受けると空になるので、区別が要る箇所は
+# 戻り値を見る)
 session_run_ids() {
-  local session=$1
-  gh run list -R "$REPO" --workflow "$WORKFLOW" \
+  local session=$1 out
+  # 既定の取得件数 (20 件) だと、対象より新しい run が多い時に稼働中のセッションを不在と誤判定するため広く取る
+  out=$(gh run list -R "$REPO" --workflow "$WORKFLOW" -L 200 \
     --json databaseId,displayTitle,status \
-    --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${session} \")) | .databaseId"
+    --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${session} \")) | .databaseId") || return 1
+  printf '%s\n' "$out"
 }
 
 cmd_up() {
@@ -86,20 +92,48 @@ cmd_up() {
 
   if [ "$wait" -eq 1 ]; then
     cmd_wait "$session"
+    # Godot 向け (--software-webgl) のセッションは、ready の直後に段階別診断を 1 回走らせて失敗段階を表示する。
+    # 診断の失敗で up 自体は失敗にしない (セッションは立っている)。WEBTUNNEL_NO_DOCTOR=1 で省略できる
+    if [ "$software_webgl" = "true" ] && [ "${WEBTUNNEL_NO_DOCTOR:-0}" != "1" ]; then
+      run_godot_doctor "$session"
+    fi
   else
     echo "準備完了待ちは: webtunnel status ${session} または webtunnel up ${session} --wait"
   fi
 }
 
+# Godot 向けセッションの段階別診断 (skills/webtunnel/scripts/godot-web-doctor.sh) を 1 回走らせる。
+# up --wait の直後に呼ぶため、タイトル画面を進めないよう実入力の段階は省略する (--skip-input)。
+# WEBTUNNEL_DOCTOR で診断スクリプトのパスを差し替えられる (テスト用)
+run_godot_doctor() {
+  local session=$1
+  local doctor="${WEBTUNNEL_DOCTOR:-$(cd "$(dirname "$0")" && pwd -P)/../skills/webtunnel/scripts/godot-web-doctor.sh}"
+  [ -f "$doctor" ] || { echo "診断スクリプトが無いため省略: ${doctor}" >&2; return 0; }
+  echo ""
+  echo "== Godot 向けの段階別診断 (WEBTUNNEL_NO_DOCTOR=1 で省略) =="
+  if WEBTUNNEL_REPO="$REPO" WEBTUNNEL_WORKFLOW="$WORKFLOW" bash "$doctor" --session "$session" --skip-input; then
+    return 0
+  fi
+  echo "診断で失敗した段階がある (上の FAILED_STAGE を参照)。セッション自体は起動している。再診断: bash ${doctor} --session ${session}" >&2
+  return 0
+}
+
 # CDP が応答するまで待つ（既定 40 分 = dev サーバ起動 15 分 + Chromium 10 分 + セッション初期化 15 分
 # の step 上限を覆う。WEBTUNNEL_WAIT_MINUTES で変更可）。健全な run を待ち切れず失敗と誤報しないための
-# 上限で、run が失敗・cancel で消えた場合は締め切りを待たずに終了する
+# 上限で、run が失敗・cancel で消えた場合は締め切りを待たずに終了する。
+# GitHub API の取得失敗は「run が無い」と区別し、待機を続ける (一時エラーで健全な run を見捨てない)。
+# 確認間隔は WEBTUNNEL_WAIT_INTERVAL 秒 (既定 10)、dispatch 直後に run の存在確認をしない猶予は
+# WEBTUNNEL_WAIT_GRACE 秒 (既定 30。run 一覧への反映の遅れを待つ。どちらもテストで短くする用)
 cmd_wait() {
   local session=$1
   local minutes="${WEBTUNNEL_WAIT_MINUTES:-40}"
+  local interval="${WEBTUNNEL_WAIT_INTERVAL:-10}"
+  local grace="${WEBTUNNEL_WAIT_GRACE:-30}"
   echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
-  local end=$(( $(date +%s) + minutes * 60 ))
-  local checks=0
+  local now
+  now=$(date +%s)
+  local end=$(( now + minutes * 60 ))
+  local grace_end=$(( now + grace ))
   while [ "$(date +%s)" -lt "$end" ]; do
     local ip
     ip=$(session_ip "$session")
@@ -107,13 +141,19 @@ cmd_wait() {
       echo "ready: http://${ip}:${CDP_PORT} (webtunnel-${session})"
       return 0
     fi
-    # dispatch 直後は run 一覧への反映が遅れるため、最初の 30 秒は run の存在チェックをしない
-    checks=$((checks + 1))
-    if [ "$checks" -gt 3 ] && [ -z "$ip" ] && [ -z "$(session_run_ids "$session")" ]; then
-      echo "セッション ${session} の run が存在しない（失敗または cancel）。確認: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
-      return 1
+    # 猶予は経過時間で判定する (確認回数で数えると WEBTUNNEL_WAIT_INTERVAL を短くした時に猶予も縮む)
+    if [ "$(date +%s)" -ge "$grace_end" ] && [ -z "$ip" ]; then
+      local ids
+      if ids=$(session_run_ids "$session"); then
+        if [ -z "$ids" ]; then
+          echo "セッション ${session} の run が存在しない（失敗または cancel）。確認: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
+          return 1
+        fi
+      else
+        echo "GitHub API から run 一覧を取得できない（一時エラーの可能性。run が無いとは判断せず待機を続ける）" >&2
+      fi
     fi
-    sleep 10
+    sleep "$interval"
   done
   echo "${minutes} 分以内に準備完了しなかった。run の状態: gh run list -R ${REPO} -w ${WORKFLOW}" >&2
   return 1
@@ -208,7 +248,7 @@ main() {
       cmd_list
       ;;
     *)
-      sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
       exit 1
       ;;
   esac
