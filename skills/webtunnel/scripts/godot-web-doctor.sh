@@ -123,6 +123,15 @@ stage_timeout_ms() {
 # 外部コマンド (gh / curl / webtunnel-cli.sh / helper) を残り時間で打ち切りながら実行する。応答待ちのまま
 # --deadline を過ぎて診断が終わらないことを防ぐ (up --wait の自動診断がここで待ち続けないため)。
 # stdout だけを返し、stderr は HELPER_ERR に溜めて失敗時の理由に使う (両方を結合すると JSON が壊れる)
+# プロセスとその子孫を止める (親だけ止めても、stdout のパイプを持つ子孫が残ると呼び出し側の
+# コマンド置換が終わらず期限を超えて待つため、葉から順に kill する)
+kill_tree() {
+  local pid=$1 child
+  for child in $(pgrep -P "$pid" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill "$pid" 2>/dev/null
+}
 with_deadline() {
   local rem pid killer code
   rem=$(remaining)
@@ -131,7 +140,7 @@ with_deadline() {
   "$@" 2>>"$HELPER_ERR" &
   pid=$!
   # 監視側の stderr は捨てる (sleep を止めた時の「Terminated」の通知を診断の出力に混ぜない)
-  ( sleep "$rem"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  ( sleep "$rem"; kill_tree "$pid" ) >/dev/null 2>&1 &
   killer=$!
   code=0
   wait "$pid" || code=$?
