@@ -88,7 +88,7 @@ run_up_wait() {
   rm -f "$TMP/ts-count" "$TMP/doctor.log"
   TS_STUB_COUNT_FILE="$TMP/ts-count" DOCTOR_STUB_LOG="$TMP/doctor.log" GH_STUB_LOG="$TMP/dispatch.log" \
     WEBTUNNEL_DOCTOR="$TMP/doctor.sh" WEBTUNNEL_WAIT_INTERVAL=0 PATH="$TMP:$PATH" "$@" \
-    bash "$CLI" up dev --wait "${UP_EXTRA[@]}" 2>&1
+    bash "$CLI" up dev --wait ${UP_EXTRA[@]+"${UP_EXTRA[@]}"} 2>&1
 }
 
 UP_EXTRA=(--software-webgl)

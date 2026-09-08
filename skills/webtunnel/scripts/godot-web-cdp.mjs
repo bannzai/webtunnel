@@ -373,13 +373,23 @@ async function screenshot(cdp, path, { jpeg = false, quality = 80, timeout } = {
     writeFileSync(path, buf);
     return { path, format: "png", bytes: buf.length };
   } catch (e) {
-    // PNG の転送が詰まった (タイムアウト) 時だけ JPEG に倒す。他のエラーはそのまま
+    // PNG の転送が詰まった (タイムアウト) 時だけ JPEG に倒す。他のエラーはそのまま。
+    // 詰まった PNG の応答は同じ WebSocket 上で流れ続けるため、JPEG は別の接続で撮る (同じ接続では
+    // PNG のデータの後ろで待たされて復旧できない)
     if (!/ms 以内に無い/.test(e.message)) throw e;
-    process.stderr.write(`PNG の撮影が ${timeout} ms 以内に終わらないため JPEG に切り替える\n`);
-    const buf = await capture("jpeg");
-    const out = path.replace(/\.png$/i, "") + ".jpg";
-    writeFileSync(out, buf);
-    return { path: out, format: "jpeg", bytes: buf.length, fallback: true };
+    process.stderr.write(`PNG の撮影が ${timeout} ms 以内に終わらないため別の接続で JPEG に切り替える\n`);
+    const alt = new Cdp({ ...cdp.opts, target: cdp.opts.target || cdp.targetUrl });
+    await alt.connect();
+    try {
+      const params = { format: "jpeg", quality };
+      const r = await alt.send("Page.captureScreenshot", params, timeout);
+      const buf = Buffer.from(r.data, "base64");
+      const out = path.replace(/\.png$/i, "") + ".jpg";
+      writeFileSync(out, buf);
+      return { path: out, format: "jpeg", bytes: buf.length, fallback: true };
+    } finally {
+      alt.close();
+    }
   }
 }
 

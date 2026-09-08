@@ -104,10 +104,11 @@ main() {
     }
     cdp_url=$(printf '%s\n' "$cdp_out" | awk '/^CDP: / {print $2; exit}')
     [ -n "$cdp_url" ] || { echo "webtunnel-cli.sh cdp の出力に CDP: 行が無い: ${cdp_out}" >&2; exit 1; }
-    args=(--cdp "$cdp_url" "${args[@]}")
+    # 空配列の展開は macOS 標準の Bash 3.2 の set -u で unbound になるため ${arr[@]+"${arr[@]}"} の形にする
+    args=(--cdp "$cdp_url" ${args[@]+"${args[@]}"})
   fi
 
-  exec node "$IMPL" "${args[@]}"
+  exec node "$IMPL" ${args[@]+"${args[@]}"}
 }
 
 main "$@"
