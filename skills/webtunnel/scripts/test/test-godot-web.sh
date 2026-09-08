@@ -324,6 +324,32 @@ else
 fi
 assert_contains "未知の操作の失敗に行番号が入る" ":3" "$out"
 
+# 途中で失敗した seq は、押しっぱなしのキーを接続を閉じる前に解放する（ゲーム側で移動が止まらないのを防ぐ）
+cat > "${TMP}/seq-held.txt" <<'EOF'
+keydown ArrowLeft
+bogus 1
+EOF
+before=$(mock_len keys)
+out=$(gw seq "${TMP}/seq-held.txt" 2>&1)
+code=$?
+if [ "$code" -ne 0 ]; then
+  assert "押下中に失敗した seq は exit 非 0" "non-zero" "non-zero"
+else
+  assert "押下中に失敗した seq は exit 非 0" "non-zero" "0"
+fi
+keys=$(mock_slice keys "$before")
+assert "失敗した seq は押下中の ArrowLeft を解放してから終了する" "keydown,keyup" \
+  "$(printf '%s' "$keys" | jq -r '[.value[] | select(.code == "ArrowLeft") | .type] | join(",")')"
+assert_contains "解放したキーを stderr に報告する" "解放した" "$out"
+
+# 単独の keydown は意図的に押したままにする用途のため、正常終了では解放しない（9. の keydown / keyup と同じ経路）
+before=$(mock_len keys)
+gw keydown ArrowLeft >/dev/null 2>&1
+keys=$(mock_slice keys "$before")
+assert "単独の keydown は正常終了で解放しない" "keydown" \
+  "$(printf '%s' "$keys" | jq -r '[.value[] | select(.code == "ArrowLeft") | .type] | join(",")')"
+gw keyup ArrowLeft >/dev/null 2>&1
+
 # --- 13. probe-input --------------------------------------------------------
 out=$(gw probe-input 2>&1)
 code=$?

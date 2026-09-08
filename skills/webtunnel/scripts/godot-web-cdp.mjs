@@ -273,8 +273,29 @@ function trackModifier(type, k) {
   else heldModifiers.delete(k.key);
 }
 
+// 押下中の全キー (修飾キー以外も)。seq が途中で失敗した時に、接続を閉じる前に解放するために追跡する
+// (閉じてもゲーム側には押下状態が残り、移動が止まらないため)
+const heldKeys = new Map();
+function trackHeld(type, k) {
+  if (type === "keyUp") heldKeys.delete(k.code);
+  else heldKeys.set(k.code, k);
+}
+async function releaseHeldKeys(cdp) {
+  const released = [];
+  for (const k of [...heldKeys.values()]) {
+    try {
+      await cdp.send("Input.dispatchKeyEvent", keyParams("keyUp", k), 3000);
+      released.push(k.code);
+    } catch (e) {
+      process.stderr.write(`押下中のキー ${k.code} を解放できない: ${e.message}\n`);
+    }
+  }
+  return released;
+}
+
 function keyParams(type, k) {
   trackModifier(type, k);
+  trackHeld(type, k);
   const p = {
     type,
     key: k.key,
@@ -376,6 +397,8 @@ async function openUrl(cdp, url, timeout) {
   const r = await cdp.send("Page.navigate", { url });
   frameId = r.frameId;
   if (r.errorText) throw new Error(`open に失敗: ${url} (${r.errorText})`);
+  // loaderId が無いのは同一ドキュメント内の遷移 (フラグメントだけ違う URL 等)。load は発生しないので待たない
+  if (!r.loaderId) return { url, status: null, frameId, sameDocument: true };
   await Promise.race([loaded, sleep(timeout).then(() => { throw new Error(`open の load が ${timeout} ms 以内に終わらない: ${url}`); })]);
   return { url, status, frameId };
 }
@@ -698,6 +721,12 @@ async function main() {
         throw new UsageError(`未知のサブコマンド: ${cmd}`);
     }
     process.stdout.write(`${JSON.stringify(out)}\n`);
+  } catch (e) {
+    // 途中で失敗して押しっぱなしのキーが残っていれば、接続を閉じる前に解放する
+    // (正常終了では解放しない。単独の keydown は意図的に押したままにする用途のため)
+    const released = await releaseHeldKeys(cdp);
+    if (released.length) process.stderr.write(`失敗したため押下中のキーを解放した: ${released.join(", ")}\n`);
+    throw e;
   } finally {
     cdp.close();
   }
