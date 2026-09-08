@@ -281,6 +281,10 @@ wait 100
 key ArrowRight --hold 300
 @1000 key Space
 console-expect "[mock] keydown   Space" 3000
+keydown Shift
+key ArrowUp
+keyup Shift
+key ArrowDown
 EOF
 hits_before=$(mock_len hits)
 keys_before=$(mock_len keys)
@@ -299,6 +303,11 @@ assert_between "seq の ArrowRight の押下時間が 300±50 ms" 250 350 \
      - [.value[] | select(.code == "ArrowRight" and .type == "keydown")][0].t) | round')"
 assert "seq の Space の keydown が記録される" "Space" \
   "$(printf '%s' "$keys" | jq -r '[.value[] | select(.code == "Space" and .type == "keydown")][0].code')"
+# 押下中の修飾キーを同じプロセス内で追跡し、後続のキーイベントの shiftKey に反映する
+assert "keydown Shift 中の key ArrowUp は shiftKey が true" "true" \
+  "$(printf '%s' "$keys" | jq -r '[.value[] | select(.code == "ArrowUp" and .type == "keydown")][0].shift')"
+assert "keyup Shift 後の key ArrowDown は shiftKey が false" "false" \
+  "$(printf '%s' "$keys" | jq -r '[.value[] | select(.code == "ArrowDown" and .type == "keydown")][0].shift')"
 
 # --- 12. seq（未知の操作） --------------------------------------------------
 cat > "${TMP}/seq-bogus.txt" <<'EOF'

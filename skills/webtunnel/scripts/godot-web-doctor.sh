@@ -120,15 +120,15 @@ stage_timeout_ms() {
   echo $((cap * 1000))
 }
 
-# helper (godot-web.sh) を残り時間で打ち切りながら実行する。--timeout は CDP の 1 要求ごとの制限で、
-# 接続・再試行・PNG → JPEG の切り替えを含む全体は制限しないため、残り時間を過ぎたらプロセスを kill する。
-# stdout (結果 JSON) だけを返し、stderr は HELPER_ERR に溜めて失敗時の理由に使う (両方を結合すると JSON が壊れる)
-helper() {
+# 外部コマンド (gh / curl / webtunnel-cli.sh / helper) を残り時間で打ち切りながら実行する。応答待ちのまま
+# --deadline を過ぎて診断が終わらないことを防ぐ (up --wait の自動診断がここで待ち続けないため)。
+# stdout だけを返し、stderr は HELPER_ERR に溜めて失敗時の理由に使う (両方を結合すると JSON が壊れる)
+with_deadline() {
   local rem pid killer code
   rem=$(remaining)
   [ "$rem" -ge 1 ] || rem=1
   : > "$HELPER_ERR"
-  bash "$HELPER" --cdp "$CDP" --game-size "$GAME_SIZE" --timeout "$(stage_timeout_ms 60)" "$@" 2>>"$HELPER_ERR" &
+  "$@" 2>>"$HELPER_ERR" &
   pid=$!
   # 監視側の stderr は捨てる (sleep を止めた時の「Terminated」の通知を診断の出力に混ぜない)
   ( sleep "$rem"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
@@ -143,6 +143,15 @@ helper() {
   fi
   return "$code"
 }
+# helper (godot-web.sh)。--timeout は CDP の 1 要求ごとの制限で、接続・再試行・PNG → JPEG の切り替えを含む
+# 全体は制限しないため、with_deadline で残り時間により打ち切る
+helper() {
+  with_deadline bash "$HELPER" --cdp "$CDP" --game-size "$GAME_SIZE" --timeout "$(stage_timeout_ms 60)" "$@"
+}
+# 残り時間に収めた秒数 (curl -m 用。上限 cap 秒)
+stage_timeout_s() {
+  echo $(( $(stage_timeout_ms "$1") / 1000 ))
+}
 helper_err() { tr '\n' ' ' <"$HELPER_ERR"; }
 # helper の stdout が JSON でなければその段階を失敗にする
 require_json() {
@@ -155,15 +164,15 @@ echo "== godot-web doctor: session=${SESSION:-"(--cdp 直接)"} repo=${REPO} dea
 # --- runner ---------------------------------------------------------------
 if [ -n "$SESSION" ]; then
   require_time runner
-  if runs=$(gh run list -R "$REPO" --workflow "$WORKFLOW" --json databaseId,status,displayTitle \
-      --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${SESSION} \")) | \"\(.databaseId) \(.status)\"" 2>&1); then
+  if runs=$(with_deadline gh run list -R "$REPO" --workflow "$WORKFLOW" --json databaseId,status,displayTitle \
+      --jq ".[] | select(.status == \"in_progress\" or .status == \"queued\") | select(.displayTitle | startswith(\"session=${SESSION} \")) | \"\(.databaseId) \(.status)\""); then
     if [ -n "$runs" ]; then
       ok runner "run $(printf '%s' "$runs" | head -1) (${REPO} / ${WORKFLOW})"
     else
       fail runner "セッション ${SESSION} の in_progress / queued な run が無い (期限切れか down 済み。gh run list -R ${REPO} -w ${WORKFLOW} で履歴を確認し、再度 up する)"
     fi
   else
-    fail runner "GitHub API に到達できない (run が無いのではなく取得の失敗。一時エラーなら再実行する): ${runs}"
+    fail runner "GitHub API に到達できない (run が無いのではなく取得の失敗。一時エラーなら再実行する): $(helper_err)"
   fi
 else
   skip runner "--cdp 直接指定のため run の確認を省略"
@@ -172,15 +181,15 @@ fi
 # --- cdp ------------------------------------------------------------------
 require_time cdp
 if [ -z "$CDP" ]; then
-  if cdp_out=$(bash "${SCRIPT_DIR}/webtunnel-cli.sh" cdp "$SESSION" 2>&1); then
+  if cdp_out=$(with_deadline bash "${SCRIPT_DIR}/webtunnel-cli.sh" cdp "$SESSION"); then
     CDP=$(printf '%s\n' "$cdp_out" | awk '/^CDP: / {print $2; exit}')
   fi
-  [ -n "$CDP" ] || fail cdp "webtunnel-${SESSION} が tailnet に無い (準備中か run の終了。webtunnel-cli.sh status ${SESSION} で確認): ${cdp_out:-}"
+  [ -n "$CDP" ] || fail cdp "webtunnel-${SESSION} が tailnet に無い (準備中か run の終了。webtunnel-cli.sh status ${SESSION} で確認): $(helper_err)"
 fi
-if version=$(curl -s -m 10 "${CDP}/json/version" 2>&1) && printf '%s' "$version" | grep -q '"Browser"'; then
+if version=$(with_deadline curl -s -m "$(stage_timeout_s 10)" "${CDP}/json/version") && printf '%s' "$version" | grep -q '"Browser"'; then
   ok cdp "${CDP} ($(printf '%s' "$version" | grep -o '"Browser": *"[^"]*"' | head -1))"
 else
-  fail cdp "${CDP}/json/version が応答しない (run を作り直すと tailscale IP が変わる。webtunnel-cli.sh cdp ${SESSION:-<session>} で引き直す): ${version:-}"
+  fail cdp "${CDP}/json/version が応答しない (run を作り直すと tailscale IP が変わる。webtunnel-cli.sh cdp ${SESSION:-<session>} で引き直す): ${version:-} $(helper_err)"
 fi
 
 # --- http -----------------------------------------------------------------
@@ -195,20 +204,26 @@ if [ -z "$URL" ]; then
     URL=$current_href
   elif [ -n "$SESSION" ]; then
     # caller workflow の port input を読む (references/godot-web-export.md「配信ポートの確認」と同じ手順)
-    if PORT=$(gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content' 2>/dev/null | base64 -d 2>/dev/null | sed -n 's/^[[:space:]]*port:[[:space:]]*"\{0,1\}\([0-9]\{1,5\}\)"\{0,1\}.*/\1/p' | head -1) && [ -n "$PORT" ]; then
+    if workflow_yaml=$(with_deadline gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content') \
+       && PORT=$(printf '%s' "$workflow_yaml" | base64 -d 2>/dev/null | sed -n 's/^[[:space:]]*port:[[:space:]]*"\{0,1\}\([0-9]\{1,5\}\)"\{0,1\}.*/\1/p' | head -1) \
+       && [ -n "$PORT" ]; then
       URL="http://localhost:${PORT}/index.html"
     fi
   fi
 fi
 [ -n "$URL" ] || fail http "配信 URL を決められない。--url か --port を指定する (port は caller workflow ${WORKFLOW} の port input)"
-# 配信 URL をすでに開いていれば同一オリジンの fetch で (ページ遷移せずゲームの進行を巻き戻さない)、
-# まだなら open してメインドキュメントの HTTP ステータスで到達を判定する (about:blank からの fetch は
-# オリジンが null で CORS に阻まれるため使わない)
-url_origin=$(printf '%s' "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
-case "$current_href" in
-  "${url_origin}"*) http_out=$(helper fetch-status "$URL") ;;
-  *) http_out=$(helper open "$URL") ;;
-esac || fail http "${URL} に runner の Chromium から到達できない ($(helper_err))。ポートは caller workflow ${WORKFLOW} の port input を読む (references/godot-web-export.md「配信ポートの確認」)。配信サーバが起動していなければ run のログ・artifact dev-server-log-<session> を見る"
+# 対象ページ (query / hash を除き、/ と /index.html を同一視) をすでに開いていれば同一オリジンの fetch で
+# (ページ遷移せずゲームの進行を巻き戻さない)、別のページなら open してメインドキュメントの HTTP ステータスで
+# 到達を判定する (about:blank からの fetch はオリジンが null で CORS に阻まれるため使わない。オリジンだけの
+# 一致で遷移を省くと別のゲームを診断してしまうため、ページ単位で比較する)
+normalize_page() {
+  printf '%s' "$1" | sed -E 's/[?#].*$//; s#^(https?://[^/]+)/?$#\1/index.html#; s#/$#/index.html#'
+}
+if [ "$(normalize_page "$current_href")" = "$(normalize_page "$URL")" ]; then
+  http_out=$(helper fetch-status "$URL")
+else
+  http_out=$(helper open "$URL")
+fi || fail http "${URL} に runner の Chromium から到達できない ($(helper_err))。ポートは caller workflow ${WORKFLOW} の port input を読む (references/godot-web-export.md「配信ポートの確認」)。配信サーバが起動していなければ run のログ・artifact dev-server-log-<session> を見る"
 require_json http "$http_out"
 http_code=$(printf '%s' "$http_out" | jq -r '.status')
 case "$http_code" in

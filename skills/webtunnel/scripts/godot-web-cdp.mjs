@@ -192,8 +192,19 @@ class Cdp {
 const STATUS_JS = (canvasSel) => `(() => {
   const c = document.querySelector(${JSON.stringify(canvasSel)});
   const r = c ? c.getBoundingClientRect() : null;
-  let webgl2 = false;
-  try { webgl2 = !!document.createElement("canvas").getContext("webgl2"); } catch (e) { webgl2 = false; }
+  // 判定結果はページ単位でキャッシュし、初回に作った診断用コンテキストは即座に解放する
+  // (status はクリックや起動待ちのたびに呼ばれる。毎回コンテキストを作って放置すると Chromium の同時
+  // コンテキスト数の上限で最も古いゲーム本体のコンテキストが失われる)
+  if (window.__godotWebWebgl2 === undefined) {
+    let webgl2 = false;
+    try {
+      const gl = document.createElement("canvas").getContext("webgl2");
+      webgl2 = !!gl;
+      if (gl) { const ext = gl.getExtension("WEBGL_lose_context"); if (ext) ext.loseContext(); }
+    } catch (e) { webgl2 = false; }
+    window.__godotWebWebgl2 = webgl2;
+  }
+  const webgl2 = window.__godotWebWebgl2;
   return {
     href: location.href,
     started: document.getElementById("status") === null,
@@ -231,22 +242,46 @@ async function holdAndRelease(sendDown, hold, sendUp) {
   if (u) throw u;
 }
 
+function mouseParams(type, x, y, button) {
+  const p = { type, x, y, button, modifiers: modifiersMask() };
+  if (type !== "mouseMoved") p.clickCount = 1;
+  return p;
+}
+
 async function clickAt(cdp, x, y, { button = "left", hold = 0 } = {}) {
-  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  await cdp.send("Input.dispatchMouseEvent", mouseParams("mouseMoved", x, y, "none"));
   await holdAndRelease(
-    () => cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 }),
+    () => cdp.sendNoWait("Input.dispatchMouseEvent", mouseParams("mousePressed", x, y, button)),
     hold,
-    () => cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 }),
+    () => cdp.sendNoWait("Input.dispatchMouseEvent", mouseParams("mouseReleased", x, y, button)),
   );
 }
 
+// 押下中の修飾キー (CDP の modifiers ビットマスク: Alt=1, Ctrl=2, Meta=4, Shift=8)。keydown / keyup で更新し、
+// 以降のキー・マウスイベントに載せる (Shift を押したまま ArrowRight を送ると shiftKey が true になる)。
+// 1 プロセス内 (seq や 1 回の呼び出し) でだけ追跡する。別々の呼び出しをまたぐ同時押しは追跡できない
+const MODIFIER_BITS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
+const heldModifiers = new Set();
+function modifiersMask() {
+  let m = 0;
+  for (const k of heldModifiers) m |= MODIFIER_BITS[k];
+  return m;
+}
+function trackModifier(type, k) {
+  if (!(k.key in MODIFIER_BITS)) return;
+  if (type === "keyDown") heldModifiers.add(k.key);
+  else heldModifiers.delete(k.key);
+}
+
 function keyParams(type, k) {
+  trackModifier(type, k);
   const p = {
     type,
     key: k.key,
     code: k.code,
     windowsVirtualKeyCode: k.keyCode,
     nativeVirtualKeyCode: k.keyCode,
+    modifiers: modifiersMask(),
   };
   if (type === "keyDown" && k.text !== undefined) p.text = k.text;
   else if (type === "keyDown") p.type = "rawKeyDown";
@@ -262,19 +297,19 @@ async function pressKey(cdp, name, { hold = 0 } = {}) {
     hold,
     () => cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyUp", k)),
   );
-  return { key: k.key, code: k.code, hold, elapsedMs: Math.round(performance.now() - t0) };
+  return { key: k.key, code: k.code, hold, modifiers: modifiersMask(), elapsedMs: Math.round(performance.now() - t0) };
 }
 
 async function keyDownOnly(cdp, name) {
   const k = resolveKey(name);
   await cdp.send("Input.dispatchKeyEvent", keyParams("keyDown", k));
-  return { key: k.key, code: k.code };
+  return { key: k.key, code: k.code, modifiers: modifiersMask() };
 }
 
 async function keyUpOnly(cdp, name) {
   const k = resolveKey(name);
   await cdp.send("Input.dispatchKeyEvent", keyParams("keyUp", k));
-  return { key: k.key, code: k.code };
+  return { key: k.key, code: k.code, modifiers: modifiersMask() };
 }
 
 // Godot 側の診断 autoload (references/godot_web_diag.gd) と window オブジェクト経由でやり取りする。
@@ -450,7 +485,7 @@ async function runSeq(cdp, file, gameSize, opts) {
         case "mouse-move": {
           const st = await getStatus(cdp);
           const p = mapPoint(st, gameSize, Number(rest[0]), Number(rest[1]));
-          await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none" });
+          await cdp.send("Input.dispatchMouseEvent", mouseParams("mouseMoved", p.x, p.y, "none"));
           r = { browser: { x: p.x, y: p.y } };
           break;
         }
@@ -599,7 +634,7 @@ async function main() {
         if (rest.length < 2) throw new UsageError("mouse-move <game_x> <game_y>");
         const st = await getStatus(cdp);
         const p = mapPoint(st, gameSize, requireNumber(rest[0], "game_x"), requireNumber(rest[1], "game_y"));
-        await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: p.x, y: p.y, button: "none" });
+        await cdp.send("Input.dispatchMouseEvent", mouseParams("mouseMoved", p.x, p.y, "none"));
         out = { browser: { x: p.x, y: p.y } };
         break;
       }

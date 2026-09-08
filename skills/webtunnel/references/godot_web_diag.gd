@@ -15,6 +15,11 @@ extends Node
 var _last_id: String = ""
 
 
+func _ready() -> void:
+	# ゲームが get_tree().paused = true でポーズ中でも問い合わせに応答する (ポーズメニューの再開ボタンを click-node で押す用途)
+	process_mode = Node.PROCESS_MODE_ALWAYS
+
+
 func _process(_delta: float) -> void:
 	if not OS.has_feature("web"):
 		return

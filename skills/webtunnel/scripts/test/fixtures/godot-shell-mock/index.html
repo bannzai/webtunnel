@@ -92,7 +92,7 @@
   });
 
   window.addEventListener("keydown", (e) => {
-    const rec = { type: "keydown", key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, t: performance.now() };
+    const rec = { type: "keydown", key: e.key, code: e.code, keyCode: e.keyCode, repeat: e.repeat, shift: e.shiftKey, t: performance.now() };
     mock.keys.push(rec);
     console.log("[mock] keydown", e.key, e.code);
   });

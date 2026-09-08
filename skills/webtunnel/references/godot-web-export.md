@@ -58,6 +58,7 @@ Godot の Web 版は DOM の `KeyboardEvent.code` を physical keycode、`Keyboa
 - agent-browser を使う場合は `press ArrowRight`（押して離す）は一致し、`keydown ArrowRight` は一致しない環境がある。長押しが要るなら `godot-web.sh key <Key> --hold <ms>` を使う
 - 押下時間: リモート経由で `keydown` の応答を待ってから時間を数えると、通信時間が押下時間へ加算されて歩数がずれる（farmsim）。`key --hold` は keydown を送った時刻から数え、指定 ms 後に必ず keyup を送ってから両方の応答を待つ
 - `key` の hold 無し（`agent-browser press` も同じ）は押下と解放が同一描画フレームに収まることがあり、1 回の入力を Godot が取りこぼす・逆に「Enter 1 回で 2 段進む」の切り分けができない。移動・通常技は `--hold 50` 程度で複数フレーム空け、波動拳のような連続入力は `seq` で 80 ms 間隔の `keydown` / `wait` / `keyup` を並べる（fighter の実測: 0.65 秒以内のコマンドは 80 ms 間隔で実装と同じ入力履歴になる）
+- 修飾キーの同時押し (Shift + 矢印等) は `seq` の中で `keydown Shift` → `key ArrowRight` → `keyup Shift` と並べる。押下中の修飾キーは同じプロセス内 (1 回の `seq`) でだけ追跡して後続のイベントに載せるため、別々の `godot-web.sh` 呼び出しにまたがる同時押しは再現できない
 - クリックの後にキー入力が効かない時は canvas をクリックしてフォーカスを戻す（Godot 既定シェルは `html/focus_canvas_on_start=true` で起動時に canvas へフォーカスする）
 
 ## 入力シナリオ（seq）

@@ -275,6 +275,26 @@ assert_contains "配信 URL を開いていれば fetch-status で確認する" 
   "fetch-status http://localhost:8000/index.html" "$log"
 assert_not_contains "配信 URL を開いていれば open し直さない" " open " "$log"
 
+# 同一オリジンでも別のページを開いている時は open して対象ページを診断する（別のゲームを診断しない）
+reset_stubs
+export HELPER_STUB_HREF="http://localhost:8000/game-a/index.html"
+out=$(run_doctor --cdp "$CDP_ARG" --url "http://localhost:8000/game-b/index.html")
+code=$?
+log=$(cat "$LOG")
+assert "同一オリジンの別ページを開いていても exit 0" "0" "$code"
+assert_contains "同一オリジンの別ページなら対象 URL を open する" \
+  "open http://localhost:8000/game-b/index.html" "$log"
+assert_not_contains "同一オリジンの別ページでは fetch-status で済ませない" "fetch-status" "$log"
+
+# / と /index.html は同じページとみなす（start_url 既定の / を開いたセッションで再読み込みしない）
+reset_stubs
+export HELPER_STUB_HREF="http://localhost:8000/"
+out=$(run_doctor --cdp "$CDP_ARG" --url "http://localhost:8000/index.html?x=1")
+code=$?
+log=$(cat "$LOG")
+assert "/ を開いていれば /index.html の診断は exit 0" "0" "$code"
+assert_contains "/ と /index.html を同じページとみなして fetch-status で確認する" "fetch-status" "$log"
+
 # --- 11. loaded: wait-started の失敗 ----------------------------------------
 reset_stubs
 export HELPER_STUB_FAIL=wait-started
