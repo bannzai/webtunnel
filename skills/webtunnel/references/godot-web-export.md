@@ -30,7 +30,7 @@ $GW shot ./tmp/after.png               # PNG がタイムアウトしたら ./tm
 配信 URL の ポートは caller workflow（既定 `.github/workflows/browser-session.yml`）の `port` input の値で、リポジトリごとに違う。例の数字を写さず、実ファイルから読む（例示のポートへ接続して接続拒否で止まった事例が複数ある）。
 
 ```bash
-gh api repos/<owner>/<repo>/contents/.github/workflows/browser-session.yml --jq '.content' | base64 -d | grep -E '^\s*port:'
+gh api repos/<owner>/<repo>/contents/.github/workflows/browser-session.yml -H 'Accept: application/vnd.github.raw+json' | grep -E '^[[:space:]]*port:'
 ```
 
 `godot-web-doctor.sh` は `--url` / `--port` を省略すると、この手順で port を読んで `http://localhost:<port>/index.html` を組み立てる。セッションの `start_url` を省略した場合は Chromium が最初からその URL を開いている（PROJECT.md「dev サーバの起動」）。

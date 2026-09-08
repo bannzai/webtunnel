@@ -87,7 +87,7 @@ chmod +x "$TMP/curl" "$TMP/doctor.sh" "$TMP/tailscale"
 run_up_wait() {
   rm -f "$TMP/ts-count" "$TMP/doctor.log"
   TS_STUB_COUNT_FILE="$TMP/ts-count" DOCTOR_STUB_LOG="$TMP/doctor.log" GH_STUB_LOG="$TMP/dispatch.log" \
-    WEBTUNNEL_DOCTOR="$TMP/doctor.sh" WEBTUNNEL_WAIT_INTERVAL=0 PATH="$TMP:$PATH" "$@" \
+    WEBTUNNEL_DOCTOR="$TMP/doctor.sh" WEBTUNNEL_WAIT_INTERVAL=0 WEBTUNNEL_WAIT_GRACE="${WAIT_GRACE:-0}" PATH="$TMP:$PATH" "$@" \
     bash "$CLI" up dev --wait ${UP_EXTRA[@]+"${UP_EXTRA[@]}"} 2>&1
 }
 
@@ -126,12 +126,13 @@ case "$out" in
 esac
 
 # 待機中に GitHub API が失敗しても「run が無い」と誤報せず待機を続け、ready で終わる
+# （猶予 WEBTUNNEL_WAIT_GRACE=0 のため 2 回目以降の確認で run の存在チェックが走る）
 cat > "$TMP/tailscale" <<'EOF'
 #!/usr/bin/env bash
 count_file="${TS_STUB_COUNT_FILE:?}"
 n=$(cat "$count_file" 2>/dev/null || echo 0)
 echo $((n + 1)) > "$count_file"
-# 6 回目以降で ready（それまでは run 存在チェック (4 回目〜) が走る）
+# 6 回目以降で ready（それまでは run 存在チェックが走る）
 [ "$n" -ge 6 ] && printf '%s webtunnel-%s linux -\n' "100.64.0.1" "dev"
 exit 0
 EOF
@@ -172,6 +173,16 @@ assert "run 一覧が空なら run 不在として exit 1" "1" "$code"
 case "$out" in
   *"run が存在しない"*) assert "run 不在の理由を出力する" "found" "found" ;;
   *) assert "run 不在の理由を出力する" "found" "missing: ${out}" ;;
+esac
+
+# 猶予 (WEBTUNNEL_WAIT_GRACE) の間は run 一覧が空でも不在と判定せず、経過時間で判定する
+# （確認間隔 0 秒で 6 回の確認が猶予 5 秒より先に終わるため、猶予中に ready になり exit 0 になる）
+out=$(WAIT_GRACE=5 run_up_wait)
+code=$?
+assert "猶予の間は run 一覧が空でも不在と判定せず ready まで待つ" "0" "$code"
+case "$out" in
+  *"run が存在しない"*) assert "猶予中に run 不在と誤報しない" "not-found" "found" ;;
+  *) assert "猶予中に run 不在と誤報しない" "not-found" "not-found" ;;
 esac
 
 echo ""

@@ -58,16 +58,20 @@ DEADLINE=180
 SKIP_INPUT=0
 KEY="Shift"
 
+# 値付きオプションに値が無い時は set -u のエラーではなく引数不正 (exit 2) にする
+need_value() {
+  [ $# -ge 2 ] || { echo "$1 には値が必要" >&2; exit 2; }
+}
 while [ $# -gt 0 ]; do
   case "$1" in
-    --session) SESSION=$2; shift 2 ;;
-    --cdp) CDP=$2; shift 2 ;;
-    --url) URL=$2; shift 2 ;;
-    --port) PORT=$2; shift 2 ;;
-    --game-size) GAME_SIZE=$2; shift 2 ;;
-    --deadline) DEADLINE=$2; shift 2 ;;
+    --session) need_value "$@"; SESSION=$2; shift 2 ;;
+    --cdp) need_value "$@"; CDP=$2; shift 2 ;;
+    --url) need_value "$@"; URL=$2; shift 2 ;;
+    --port) need_value "$@"; PORT=$2; shift 2 ;;
+    --game-size) need_value "$@"; GAME_SIZE=$2; shift 2 ;;
+    --deadline) need_value "$@"; DEADLINE=$2; shift 2 ;;
     --skip-input) SKIP_INPUT=1; shift ;;
-    --key) KEY=$2; shift 2 ;;
+    --key) need_value "$@"; KEY=$2; shift 2 ;;
     -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     *) echo "不明なオプション: $1" >&2; exit 2 ;;
   esac
@@ -213,8 +217,9 @@ if [ -z "$URL" ]; then
     URL=$current_href
   elif [ -n "$SESSION" ]; then
     # caller workflow の port input を読む (references/godot-web-export.md「配信ポートの確認」と同じ手順)
-    if workflow_yaml=$(with_deadline gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" --jq '.content') \
-       && PORT=$(printf '%s' "$workflow_yaml" | base64 -d 2>/dev/null | sed -n 's/^[[:space:]]*port:[[:space:]]*"\{0,1\}\([0-9]\{1,5\}\)"\{0,1\}.*/\1/p' | head -1) \
+    # raw で受けて base64 の -d / -D の差 (GNU / 古い macOS) を避ける
+    if workflow_yaml=$(with_deadline gh api "repos/${REPO}/contents/.github/workflows/${WORKFLOW}" -H 'Accept: application/vnd.github.raw+json') \
+       && PORT=$(printf '%s' "$workflow_yaml" | sed -n 's/^[[:space:]]*port:[[:space:]]*"\{0,1\}\([0-9]\{1,5\}\)"\{0,1\}.*/\1/p' | head -1) \
        && [ -n "$PORT" ]; then
       URL="http://localhost:${PORT}/index.html"
     fi

@@ -68,12 +68,12 @@ case "${1:-}" in
     fi
     ;;
   api)
-    # gh api --jq '.content' と同じく base64 で返す（既定は port: "8000" を宣言した caller workflow）
+    # gh api -H 'Accept: application/vnd.github.raw+json' と同じく YAML を生で返す（既定は port: "8000" を宣言した caller workflow）
     printf '%s\n' "${GH_STUB_WORKFLOW_YAML:-jobs:
   session:
     uses: bannzai/webtunnel/.github/workflows/browser-session.yml@main
     with:
-      port: \"8000\"}" | base64
+      port: \"8000\"}"
     ;;
   *) exit 1 ;;
 esac
@@ -357,6 +357,15 @@ reset_stubs
 out=$(run_doctor --cdp "$CDP_ARG" --deadline abc)
 code=$?
 assert "--deadline が整数でなければ exit 2" "2" "$code"
+
+# 値付きオプションを値なしで渡した時は set -u のエラーではなく exit 2 にする
+for opt in --session --cdp --url --port --game-size --deadline --key; do
+  reset_stubs
+  out=$(run_doctor "$opt")
+  code=$?
+  assert "${opt} を値なしで渡すと exit 2" "2" "$code"
+  assert_contains "${opt} の値が無いことを理由に書く" "値が必要" "$out"
+done
 
 echo ""
 echo "PASS: ${PASS} / FAIL: ${FAIL}"

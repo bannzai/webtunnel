@@ -9,7 +9,7 @@
 ##             {id, name, found: false}
 ## 前提: stretch mode が canvas_items で aspect が keep のプロジェクト。get_global_rect() はビューポート座標を返し、
 ## これがゲームの表示解像度の座標と一致する。CanvasLayer に transform を掛けている場合や Node2D (Control でない)
-## は対象外 (found: false)。名前はツリー全体から find_child(name, true, false) で最初に一致した Control を返す。
+## は対象外 (found: false)。名前はツリー全体から find_children(name, "Control", true, false) で最初に一致した Control を返す。
 extends Node
 
 var _last_id: String = ""
@@ -37,9 +37,10 @@ func _process(_delta: float) -> void:
 	_last_id = id
 	var name_to_find: String = str(request.get("name", ""))
 	var response: Dictionary = {"id": id, "name": name_to_find, "found": false}
-	var node: Node = get_tree().root.find_child(name_to_find, true, false)
-	if node is Control:
-		var rect: Rect2 = (node as Control).get_global_rect()
+	# 名前だけで find_child すると同名の Control でないノードが先に見つかって found: false になるため、型で絞る
+	var matches: Array[Node] = get_tree().root.find_children(name_to_find, "Control", true, false)
+	if not matches.is_empty():
+		var rect: Rect2 = (matches[0] as Control).get_global_rect()
 		response["found"] = true
 		response["x"] = rect.position.x
 		response["y"] = rect.position.y
