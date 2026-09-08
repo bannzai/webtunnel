@@ -219,12 +219,25 @@ function mapPoint(status, gameSize, gx, gy) {
   return { x: Math.round(ox + gx * s), y: Math.round(oy + gy * s), scale: s, offset: { x: ox, y: oy } };
 }
 
+// 押下 (down) を送った直後から待ち、指定時間後に必ず解放 (up) を送ってから両方の応答を見る。
+// down の応答を待たないため、その拒否 (エラー・タイムアウト) は先にハンドラを付けて捕まえておく
+// (付けないと待機中の拒否で Node が未処理の Promise 拒否として終了し、up が送られず押しっぱなしになる)
+async function holdAndRelease(sendDown, hold, sendUp) {
+  const downErr = sendDown().then(() => null, (e) => e);
+  if (hold > 0) await sleep(hold);
+  const upErr = sendUp().then(() => null, (e) => e);
+  const [d, u] = await Promise.all([downErr, upErr]);
+  if (d) throw d;
+  if (u) throw u;
+}
+
 async function clickAt(cdp, x, y, { button = "left", hold = 0 } = {}) {
   await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
-  const down = cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 });
-  if (hold > 0) await sleep(hold);
-  const up = cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 });
-  await Promise.all([down, up]);
+  await holdAndRelease(
+    () => cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount: 1 }),
+    hold,
+    () => cdp.sendNoWait("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount: 1 }),
+  );
 }
 
 function keyParams(type, k) {
@@ -244,17 +257,11 @@ function keyParams(type, k) {
 async function pressKey(cdp, name, { hold = 0 } = {}) {
   const k = resolveKey(name);
   const t0 = performance.now();
-  const down = cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyDown", k));
-  let up;
-  if (hold > 0) {
-    await sleep(hold);
-    up = cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyUp", k));
-  } else {
-    up = cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyUp", k));
-  }
-  const results = await Promise.allSettled([down, up]);
-  const failed = results.find((r) => r.status === "rejected");
-  if (failed) throw failed.reason;
+  await holdAndRelease(
+    () => cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyDown", k)),
+    hold,
+    () => cdp.sendNoWait("Input.dispatchKeyEvent", keyParams("keyUp", k)),
+  );
   return { key: k.key, code: k.code, hold, elapsedMs: Math.round(performance.now() - t0) };
 }
 

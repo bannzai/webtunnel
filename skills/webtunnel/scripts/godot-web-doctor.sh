@@ -26,7 +26,8 @@
 #   --key       input 段階で送るキー (既定 Shift。単独では画面を進めにくい修飾キー)
 # Env:   WEBTUNNEL_REPO / WEBTUNNEL_WORKFLOW  runner 段階と port の解決に使う (local/webtunnel と同じ)
 #        GODOT_WEB_HELPER                     godot-web.sh のパス (テストでスタブに差し替える用)
-#        GODOT_WEB_DOCTOR_DIR                 shot 段階の保存先 (既定 ./tmp/godot-web-doctor)
+#        GODOT_WEB_DOCTOR_DIR                 shot 段階の保存先と helper の stderr の置き場 (既定 ./tmp/godot-web-doctor)
+# 期限: --deadline は診断全体の絶対期限。helper の各呼び出しは残り時間で打ち切り、段階を通過しても超過していれば NG にする
 # Exit:  0=全段階 OK / 1=いずれかの段階で NG (FAILED_STAGE=<段階名> を出力) / 2=引数不正
 set -euo pipefail
 
@@ -79,21 +80,31 @@ esac
 START=$(date +%s)
 END=$((START + DEADLINE))
 
-ok()   { printf 'OK   %s: %s\n' "$1" "$2"; }
-skip() { printf 'SKIP %s: %s\n' "$1" "$2"; }
+WORK_DIR="${GODOT_WEB_DOCTOR_DIR:-./tmp/godot-web-doctor}"
+mkdir -p "$WORK_DIR"
+HELPER_ERR="${WORK_DIR}/helper-stderr.$$"
+: > "$HELPER_ERR"
+
 fail() {
   printf 'NG   %s: %s\n' "$1" "$2"
   echo ""
   echo "FAILED_STAGE=$1"
   exit 1
 }
-
-# 残り時間 (秒)。0 以下なら期限切れとして失敗する
+# 残り時間 (秒)。0 以下なら期限切れ
 remaining() {
   local now
   now=$(date +%s)
   echo $((END - now))
 }
+# 段階を通過しても、その時点で期限を超えていれば期限切れとして失敗にする (期限は診断全体の絶対期限)
+ok() {
+  if [ "$(remaining)" -lt 0 ]; then
+    fail "$1" "段階自体は通ったが期限 ${DEADLINE} 秒を超過した (--deadline で延ばせる): $2"
+  fi
+  printf 'OK   %s: %s\n' "$1" "$2"
+}
+skip() { printf 'SKIP %s: %s\n' "$1" "$2"; }
 require_time() {
   local stage=$1
   if [ "$(remaining)" -le 0 ]; then
@@ -109,8 +120,34 @@ stage_timeout_ms() {
   echo $((cap * 1000))
 }
 
+# helper (godot-web.sh) を残り時間で打ち切りながら実行する。--timeout は CDP の 1 要求ごとの制限で、
+# 接続・再試行・PNG → JPEG の切り替えを含む全体は制限しないため、残り時間を過ぎたらプロセスを kill する。
+# stdout (結果 JSON) だけを返し、stderr は HELPER_ERR に溜めて失敗時の理由に使う (両方を結合すると JSON が壊れる)
 helper() {
-  bash "$HELPER" --cdp "$CDP" --game-size "$GAME_SIZE" --timeout "$(stage_timeout_ms 60)" "$@"
+  local rem pid killer code
+  rem=$(remaining)
+  [ "$rem" -ge 1 ] || rem=1
+  : > "$HELPER_ERR"
+  bash "$HELPER" --cdp "$CDP" --game-size "$GAME_SIZE" --timeout "$(stage_timeout_ms 60)" "$@" 2>>"$HELPER_ERR" &
+  pid=$!
+  # 監視側の stderr は捨てる (sleep を止めた時の「Terminated」の通知を診断の出力に混ぜない)
+  ( sleep "$rem"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+  killer=$!
+  code=0
+  wait "$pid" || code=$?
+  pkill -P "$killer" 2>/dev/null
+  kill "$killer" 2>/dev/null
+  wait "$killer" 2>/dev/null
+  if [ "$code" -ne 0 ] && [ "$(remaining)" -le 0 ]; then
+    echo "期限 ${DEADLINE} 秒を超過したため打ち切った" >>"$HELPER_ERR"
+  fi
+  return "$code"
+}
+helper_err() { tr '\n' ' ' <"$HELPER_ERR"; }
+# helper の stdout が JSON でなければその段階を失敗にする
+require_json() {
+  local stage=$1 out=$2
+  printf '%s' "$out" | jq -e . >/dev/null 2>&1 || fail "$stage" "helper の出力が JSON でない: ${out} $(helper_err)"
 }
 
 echo "== godot-web doctor: session=${SESSION:-"(--cdp 直接)"} repo=${REPO} deadline=${DEADLINE}s =="
@@ -148,7 +185,8 @@ fi
 
 # --- http -----------------------------------------------------------------
 require_time http
-status_json=$(helper status 2>&1) || fail http "CDP には繋がるがページの状態を取得できない: ${status_json}"
+status_json=$(helper status) || fail http "CDP には繋がるがページの状態を取得できない: $(helper_err)"
+require_json http "$status_json"
 current_href=$(printf '%s' "$status_json" | jq -r '.href // ""')
 if [ -z "$URL" ]; then
   if [ -n "$PORT" ]; then
@@ -168,9 +206,10 @@ fi
 # オリジンが null で CORS に阻まれるため使わない)
 url_origin=$(printf '%s' "$URL" | sed -E 's#^(https?://[^/]+).*#\1#')
 case "$current_href" in
-  "${url_origin}"*) http_out=$(helper fetch-status "$URL" 2>&1) ;;
-  *) http_out=$(helper open "$URL" 2>&1) ;;
-esac || fail http "${URL} に runner の Chromium から到達できない (${http_out})。ポートは caller workflow ${WORKFLOW} の port input を読む (references/godot-web-export.md「配信ポートの確認」)。配信サーバが起動していなければ run のログ・artifact dev-server-log-<session> を見る"
+  "${url_origin}"*) http_out=$(helper fetch-status "$URL") ;;
+  *) http_out=$(helper open "$URL") ;;
+esac || fail http "${URL} に runner の Chromium から到達できない ($(helper_err))。ポートは caller workflow ${WORKFLOW} の port input を読む (references/godot-web-export.md「配信ポートの確認」)。配信サーバが起動していなければ run のログ・artifact dev-server-log-<session> を見る"
+require_json http "$http_out"
 http_code=$(printf '%s' "$http_out" | jq -r '.status')
 case "$http_code" in
   2*|3*) ok http "${URL} -> HTTP ${http_code}" ;;
@@ -179,7 +218,8 @@ esac
 
 # --- loaded ---------------------------------------------------------------
 require_time loaded
-loaded_out=$(helper wait-started --timeout "$(stage_timeout_ms 60)" 2>&1) || fail loaded "${loaded_out}"
+loaded_out=$(helper wait-started --timeout "$(stage_timeout_ms 60)") || fail loaded "$(helper_err)"
+require_json loaded "$loaded_out"
 ok loaded "#status が消えた (Godot 起動完了): $(printf '%s' "$loaded_out" | jq -c '{href, viewport, canvas}')"
 
 # --- webgl2 ---------------------------------------------------------------
@@ -192,9 +232,8 @@ fi
 
 # --- shot -----------------------------------------------------------------
 require_time shot
-shot_dir="${GODOT_WEB_DOCTOR_DIR:-./tmp/godot-web-doctor}"
-mkdir -p "$shot_dir"
-shot_out=$(helper shot "${shot_dir}/doctor-$(date +%H%M%S).png" --timeout "$(stage_timeout_ms 60)" 2>&1) || fail shot "撮影が期限内に終わらない (PNG も JPEG も失敗): ${shot_out}"
+shot_out=$(helper shot "${WORK_DIR}/doctor-$(date +%H%M%S).png" --timeout "$(stage_timeout_ms 60)") || fail shot "撮影が期限内に終わらない (PNG も JPEG も失敗): $(helper_err)"
+require_json shot "$shot_out"
 ok shot "$(printf '%s' "$shot_out" | jq -r '"\(.format) \(.bytes) bytes \(.path)" + (if .fallback then " (PNG がタイムアウトし JPEG に倒した)" else "" end)')"
 
 # --- input ----------------------------------------------------------------
@@ -202,7 +241,8 @@ if [ "$SKIP_INPUT" -eq 1 ]; then
   skip input "--skip-input"
 else
   require_time input
-  input_out=$(helper probe-input "$KEY" --timeout "$(stage_timeout_ms 10)" 2>&1) || fail input "キー ${KEY} を送ってもページが keydown を受信しない (canvas のフォーカス・CDP の Input が届いているかを確認): ${input_out}"
+  input_out=$(helper probe-input "$KEY" --timeout "$(stage_timeout_ms 10)") || fail input "キー ${KEY} を送ってもページが keydown を受信しない (canvas のフォーカス・CDP の Input が届いているかを確認): $(helper_err)"
+  require_json input "$input_out"
   ok input "$(printf '%s' "$input_out" | jq -c '{sent, got: {key: .got.key, code: .got.code}}')"
 fi
 
