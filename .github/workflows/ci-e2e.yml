@@ -16,6 +16,8 @@ jobs:
     # Ubuntu 24.04 の AppArmor 制限では、取得した Chromium の user namespace sandbox が起動できない。
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/tmp/playwright-browsers
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
@@ -26,4 +28,7 @@ jobs:
       - name: テスト用 Chromium をインストールする
         run: npx --yes playwright@1.63.0 install chromium --only-shell --with-deps
       - name: ブラウザ操作を検証する
-        run: bash skills/webtunnel/scripts/test/test-godot-web.sh
+        run: |
+          browsers=("$PLAYWRIGHT_BROWSERS_PATH"/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell)
+          [[ ${#browsers[@]} -eq 1 && -x "${browsers[0]}" ]]
+          GODOT_WEB_TEST_CHROMIUM="${browsers[0]}" bash skills/webtunnel/scripts/test/test-godot-web.sh
