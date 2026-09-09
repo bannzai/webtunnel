@@ -1,0 +1,27 @@
+# managed-by: setup-ci (bannzai/castle)
+name: 単体テスト
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: シェルの自動テストを実行する
+        run: |
+          for test in local/test/test-*.sh skills/test/test-*.sh skills/webtunnel/scripts/test/test-*.sh; do
+            if [[ "$test" == */test-godot-web.sh ]]; then continue; fi
+            bash "$test"
+          done
