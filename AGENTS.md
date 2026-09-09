@@ -14,7 +14,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 - CDP への接続は MagicDNS 名ではなく tailscale IP で行う（参照: PROJECT.md「CDP の Host ヘッダ制約」）
 
 ## セッション操作
-- `local/webtunnel` CLI を使う: `up <session> [--wait]` / `down <session>` / `list` / `status <session>` / `cdp <session>` / `preview <session>` / `screenshot <session>`（オプションはスクリプト冒頭の使い方を参照）
+- セッション操作には `local/webtunnel` CLI を使う。コマンドとオプションはスクリプト冒頭の使い方を参照する
 - 放置しても `duration_minutes`（既定 60 分）で自動終了する
 - 動作確認の対象は runner 上で起動する dev サーバ。何をどう起動するかは caller workflow の input で渡す（参照: PROJECT.md「dev サーバの起動」）
 
