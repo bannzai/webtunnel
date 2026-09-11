@@ -149,7 +149,7 @@ jobs:
 
       # タグは可変で差し替えられうるため commit SHA で固定する（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
       # checkout 後に git 認証は使わないため token を .git/config に残さない
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -166,7 +166,7 @@ jobs:
       # （job.workflow_sha / job.workflow_repository は reusable workflow では呼ばれた workflow ファイルを指す）。
       # caller リポジトリのディレクトリと衝突しにくい dot 付きのパスに置く
       - name: webtunnel（runner スクリプト）を checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
@@ -226,7 +226,7 @@ jobs:
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
       - name: Tailscale に参加
-        uses: tailscale/github-action@306e68a486fd2350f2bfc3b19fcd143891a4a2d8 # v4.1.2
+        uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           oauth-client-id: ${{ secrets.TS_OIDC_CLIENT_ID }}
           audience: ${{ secrets.TS_OIDC_AUDIENCE }}
@@ -284,7 +284,7 @@ jobs:
       - name: 録画を artifact にアップロード
         if: always() && inputs.record == 'true'
         timeout-minutes: 10
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: recording-${{ inputs.session }}
           path: ${{ runner.temp }}/webtunnel-recording.mp4
@@ -299,7 +299,7 @@ jobs:
       - name: dev サーバのログを artifact にアップロード
         if: always() && (inputs.start_command != '' || inputs.setup_command != '') && env.WEBTUNNEL_HAS_AUTH_ENV != 'true'
         timeout-minutes: 10
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: dev-server-log-${{ inputs.session }}
           path: ${{ runner.temp }}/webtunnel-dev-server*.log
