@@ -19,7 +19,6 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 - 動作確認の対象は runner 上で起動する dev サーバ。何をどう起動するかは caller workflow の input で渡す（参照: PROJECT.md「dev サーバの起動」）
 
 ## 検証
-- 自動テスト: 引数なしの `make` で CI (`ci-test.yml` / `ci-e2e.yml`) と同じシェルの自動テストとブラウザ E2E (`verify` target) が走ること
 - セッション疎通: `local/webtunnel status <session>` が HTTP 200 を返すこと
 - 操作: `agent-browser --cdp http://<tailscale IP>:9222` で open / screenshot が動くこと（`--session` は作業スペース名にする）
 - preview: `local/webtunnel preview <session>` で開いた画面に CDP 操作がライブ映像として反映されること
