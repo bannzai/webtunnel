@@ -38,7 +38,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 
 ## 重要な原則
 
-- **CDP への接続は tailscale IP で行う。** Chromium は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、MagicDNS 名（`webtunnel-<session>`）では接続できない。IP は `webtunnel-cli.sh cdp <session>` が出力する。
+- **CDP への接続は tailscale IP で行う。** Chromium は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、MagicDNS 名（`webtunnel-<session>-<run id>`）では接続できない。IP は `webtunnel-cli.sh cdp <session>` が出力する（`tag:ci` と起動中の run id で確かめたノードだけを返す。PROJECT.md「接続先ノードの検証」）。
 - **画面の状態は実スクリーンショットを Read して判断する。** workflow のログや `status` の HTTP 200 だけで「表示できている」と判断しない。
 - **runner から到達できる URL しか開けない。** ローカルマシンで動いている dev サーバは runner の Chromium からは見えない。
 - セッションは使う時だけ up し、終わったら down する（放置しても `duration_minutes`（既定 60 分）で自動終了する）。
@@ -47,7 +47,7 @@ GitHub Actions の Linux Runner 上の Chromium を、Tailscale 経由でロー�
 ## ファイル構成
 
 - `scripts/webtunnel-cli.sh` — `local/webtunnel` CLI を、skill の設置場所（symlink 経由を含む）に依存せず呼び出すラッパー
-- `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・tailnet 接続・caller workflow・Secrets）を集めて READY / NOT_READY を返す。あわせて対象 repo の OIDC subject 接頭辞とその形式、trust credential に設定すべき Subject を `oidc-subject` の行に表示する（Subject の一致は API で判定できないため、人が突き合わせる材料として出す）
+- `scripts/preflight.sh` — Phase 1 の判断材料（CLI・agent-browser・jq・tailnet 接続・caller workflow・Secrets）を集めて READY / NOT_READY を返す。あわせて対象 repo の OIDC subject 接頭辞とその形式、trust credential に設定すべき Subject を `oidc-subject` の行に表示する（Subject の一致は API で判定できないため、人が突き合わせる材料として出す）
 - `scripts/fetch-recording.sh` — セッション名から workflow run を特定して録画 artifact をダウンロードする
 - `scripts/godot-web.sh` — Godot の Web エクスポート用の操作ヘルパ（実体は `godot-web-cdp.mjs`。Node 22 で CDP に直接接続）。ゲーム座標のクリック（`click`）、Control 名のクリック（`click-node`）、ms 指定の長押し（`key --hold`）、1 行 1 操作のシナリオ再生（`seq`）、JPEG フォールバック付きの撮影（`shot`）、起動判定（`wait-started` / `status`）。サブコマンドはスクリプトのヘッダーコメントを SSOT とする
 - `scripts/godot-web-doctor.sh` — Godot セッションの段階別診断。runner の run → CDP → 配信 HTTP → 起動完了（`#status` の消滅）→ WebGL2 → 撮影 → 実入力 の順に判定し、失敗した段階名（`FAILED_STAGE=`）を出す。期限付き
@@ -100,7 +100,7 @@ READY でも、次に当たる場合はローカルの `agent-browser` skill に
 
 ### Phase 2: セッションを起動する
 
-セッション名は repo・worktree を識別できる一意な名前にする（repo を跨いで同名だと tailnet ホスト名 `webtunnel-<session>` が衝突する）。
+セッション名は repo・worktree を識別できる一意な名前にする（tailnet ホスト名 `webtunnel-<session>-<run id>` が 63 文字を超えると起動時の入力検証で失敗するため、40 文字以内に収める）。
 
 ```bash
 WEBTUNNEL_REPO=<owner>/<repo> bash ${CLAUDE_SKILL_DIR}/scripts/webtunnel-cli.sh up <session> --wait

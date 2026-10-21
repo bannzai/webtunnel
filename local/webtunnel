@@ -14,7 +14,8 @@
 #   webtunnel screenshot <session> [出力パス]  # agent-browser 経由でスクリーンショットを保存
 #
 # CDP は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、
-# MagicDNS 名（webtunnel-<session>）ではなく tailscale IP で接続する（PROJECT.md「CDP の Host ヘッダ制約」参照）。
+# MagicDNS 名（webtunnel-<session>-<run id>）ではなく tailscale IP で接続する（PROJECT.md「CDP の Host ヘッダ制約」参照）。
+# 接続先の IP の解決に jq を使う。
 #
 # 対象リポジトリの切り替え（各アプリ repo の caller workflow を叩く場合）:
 #   WEBTUNNEL_REPO=<owner>/<repo> [WEBTUNNEL_WORKFLOW=browser-session.yml] webtunnel up <session>
@@ -33,10 +34,21 @@ ts_bin() {
   fi
 }
 
-# tailnet に参加している webtunnel-<session> の IP を返す（未参加なら空）
+# 自分の run のノード（tag:ci が付き、ホスト名が webtunnel-<session>-<起動中の run id>）の IPv4 を返す（無ければ空）。
+# ホスト名は誰でも名乗れるため、OIDC で参加したノードにしか付かない tag:ci と、GitHub 上で起動中の run id の
+# 両方で身元を確かめる（参照: PROJECT.md「接続先ノードの検証」）。run 一覧を取得できない時は名前だけで決めず空を返す
 session_ip() {
-  local session=$1
-  "$(ts_bin)" status 2>/dev/null | awk -v h="webtunnel-${session}" '$2 == h {print $1; exit}'
+  local session=$1 ids
+  ids=$(session_run_ids "$session") || return 0
+  [ -n "$ids" ] || return 0
+  "$(ts_bin)" status --json 2>/dev/null | jq -r --arg prefix "webtunnel-${session}-" --arg ids "$ids" '
+    ($ids | split("\n") | map(select(. != ""))) as $runs
+    | [(.Peer // {})[]
+       | select((.Tags // []) | index("tag:ci"))
+       | select((.HostName // "") | startswith($prefix))
+       | select((.HostName | ltrimstr($prefix)) as $id | $runs | index($id))]
+    | sort_by(.Online | not)
+    | [(.[0].TailscaleIPs // [])[] | select(test("^[0-9.]+$"))][0] // empty'
 }
 
 # session 名に一致する実行中/待機中の run ID を列挙する。GitHub API の失敗 (一時エラー・レート制限) は
@@ -69,12 +81,18 @@ cmd_up() {
     esac
   done
 
-  if [ -n "$(session_ip "$session")" ]; then
-    echo "セッション ${session} はすでに tailnet に存在する（冪等: 何もしない）"
-    return 0
-  fi
-  if [ -n "$(session_run_ids "$session")" ]; then
-    echo "セッション ${session} の run はすでに起動中（準備中の可能性。webtunnel status ${session} で確認）"
+  # run 一覧を取得できないまま dispatch すると、稼働中のセッションに重ねて run を起動しうるため中断する
+  local ids
+  ids=$(session_run_ids "$session") || {
+    echo "GitHub API から run 一覧を取得できない（一時エラーの可能性）。時間をおいて再実行する" >&2
+    return 1
+  }
+  if [ -n "$ids" ]; then
+    if [ -n "$(session_ip "$session")" ]; then
+      echo "セッション ${session} はすでに tailnet に存在する（冪等: 何もしない）"
+    else
+      echo "セッション ${session} の run はすでに起動中（準備中の可能性。webtunnel status ${session} で確認）"
+    fi
     return 0
   fi
 
@@ -129,7 +147,7 @@ cmd_wait() {
   local minutes="${WEBTUNNEL_WAIT_MINUTES:-40}"
   local interval="${WEBTUNNEL_WAIT_INTERVAL:-10}"
   local grace="${WEBTUNNEL_WAIT_GRACE:-30}"
-  echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
+  echo "セッション ${session} の準備完了を待機中...（最大 ${minutes} 分）"
   local now
   now=$(date +%s)
   local end=$(( now + minutes * 60 ))
@@ -138,7 +156,7 @@ cmd_wait() {
     local ip
     ip=$(session_ip "$session")
     if [ -n "$ip" ] && curl -s -m 5 "http://${ip}:${CDP_PORT}/json/version" >/dev/null 2>&1; then
-      echo "ready: http://${ip}:${CDP_PORT} (webtunnel-${session})"
+      echo "ready: http://${ip}:${CDP_PORT} (セッション ${session})"
       return 0
     fi
     # 猶予は経過時間で判定する (確認回数で数えると WEBTUNNEL_WAIT_INTERVAL を短くした時に猶予も縮む)
@@ -176,7 +194,10 @@ cmd_down() {
 
 cmd_list() {
   echo "== tailnet 上のセッション =="
-  "$(ts_bin)" status 2>/dev/null | awk '$2 ~ /^webtunnel-/ {print $2 "  " $1}' | sort
+  "$(ts_bin)" status --json 2>/dev/null | jq -r '(.Peer // {})[]
+    | select((.Tags // []) | index("tag:ci"))
+    | select((.HostName // "") | startswith("webtunnel-"))
+    | "\(.HostName)  \((.TailscaleIPs // [])[0] // "")"' | sort
   echo ""
   echo "== workflow run（直近 10 件）=="
   gh run list -R "$REPO" --workflow "$WORKFLOW" -L 10
@@ -187,7 +208,7 @@ cmd_status() {
   local ip
   ip=$(session_ip "$session")
   if [ -z "$ip" ]; then
-    echo "webtunnel-${session} は tailnet に存在しない（未起動 or 準備中）" >&2
+    echo "セッション ${session} は tailnet に存在しない（未起動 or 準備中）" >&2
     return 1
   fi
   curl -s -m 10 -w "\nHTTP %{http_code} / %{time_total}s\n" "http://${ip}:${CDP_PORT}/json/version"
@@ -197,7 +218,7 @@ cmd_cdp() {
   local session=$1
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
   echo "CDP: http://${ip}:${CDP_PORT}"
   echo ""
   echo "agent-browser の接続例（--session は作業スペース名にする。~/.claude/rules/agent-browser-session-naming.md 参照）:"
@@ -210,7 +231,7 @@ cmd_preview() {
   local session=$1
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
   local url="http://${ip}:${PREVIEW_PORT}/"
   curl -fsS -m 10 -o /dev/null "$url" || {
     echo "preview が応答しない（up --no-preview で起動していないか確認する）: ${url}" >&2
@@ -227,7 +248,7 @@ cmd_screenshot() {
   command -v agent-browser >/dev/null 2>&1 || { echo "agent-browser が必要" >&2; return 1; }
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
 
   mkdir -p "$(dirname "$out")"
   # agent-browser のセッション名は作業スペース名 + tunnel セッション名で固有にする
@@ -248,7 +269,7 @@ main() {
       cmd_list
       ;;
     *)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
       exit 1
       ;;
   esac

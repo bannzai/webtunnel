@@ -57,6 +57,12 @@ else
   ng "agent-browser" "コマンドが無い" "agent-browser をインストールする"
 fi
 
+if command -v jq >/dev/null 2>&1; then
+  ok "jq" "$(command -v jq)"
+else
+  ng "jq" "コマンドが無い" "jq をインストールする（local/webtunnel が接続先ノードの検証に使う）"
+fi
+
 if "$(ts_bin)" status >/dev/null 2>&1; then
   ok "tailnet" "tailscale status が応答する"
 else

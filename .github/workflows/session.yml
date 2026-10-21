@@ -7,7 +7,7 @@ on:
   workflow_call:
     inputs:
       session:
-        description: "セッション名。tailnet ホスト名 webtunnel-<session> になる（小文字英数字とハイフンのみ）"
+        description: "セッション名。tailnet ホスト名 webtunnel-<session>-<run id> になる（小文字英数字とハイフンのみ）"
         type: string
         required: true
       duration_minutes:
@@ -92,7 +92,7 @@ env:
   # secrets コンテキストは step の if で直接参照できないため、有無だけを env に写して判定に使う
   WEBTUNNEL_HAS_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV != '' }}
 
-# 同名セッションの同時起動を防ぐ（tailnet ホスト名の衝突防止）。
+# 同名セッションの同時起動を防ぐ（同じセッション名に run が 2 つあると、CLI がどちらに接続するか定まらない）。
 # auth key の発行 job も待たせるため workflow 単位に置く。session job だけに置くと、後続の run が
 # 先に発行した auth key が前の run の終了待ちの間に失効する。
 # グループは caller リポジトリ単位のため、repo を跨いだ同名セッションは防げない
@@ -250,10 +250,20 @@ jobs:
             echo "job.workflow_sha が空。runner スクリプトの版を固定できないため中断" >&2
             exit 1
           }
+          # ホスト名に run id を含めるのは、CLI が自分の dispatch した run のノードだけを接続先にするため
+          # （参照: PROJECT.md「接続先ノードの検証」）。DNS ラベルの上限 63 文字を超えると CLI が照合できない
+          TS_HOSTNAME="webtunnel-${SESSION}-${GITHUB_RUN_ID}"
+          [ "${#TS_HOSTNAME}" -le 63 ] || {
+            echo "tailnet ホスト名 ${TS_HOSTNAME} が 63 文字を超える。session を短くする" >&2
+            exit 1
+          }
           if [ -z "$START_URL" ] && [ -n "$START_COMMAND" ]; then
             START_URL="http://localhost:${PORT}/"
           fi
-          echo "START_URL=${START_URL:-about:blank}" >> "$GITHUB_ENV"
+          {
+            echo "START_URL=${START_URL:-about:blank}"
+            echo "TS_HOSTNAME=${TS_HOSTNAME}"
+          } >> "$GITHUB_ENV"
 
       # タグは可変で差し替えられうるため commit SHA で固定する（参照: PROJECT.md「リポジトリ公開に耐える安全性」）
       # checkout 後に git 認証は使わないため token を .git/config に残さない
@@ -467,7 +477,7 @@ jobs:
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
           authkey: ${{ steps.tailscale-auth-key.outputs.auth_key }}
-          hostname: webtunnel-${{ inputs.session }}
+          hostname: ${{ env.TS_HOSTNAME }}
 
       - name: tailnet へブリッジ
         timeout-minutes: 10
@@ -490,7 +500,7 @@ jobs:
           {
             echo "## WebTunnel session ready"
             echo ""
-            echo "- hostname: \`webtunnel-${SESSION}\`"
+            echo "- hostname: \`${TS_HOSTNAME}\`"
             echo "- CDP の接続先: \`webtunnel cdp ${SESSION}\`（Host ヘッダ制約のため MagicDNS 名ではなく tailscale IP で接続する。PROJECT.md「CDP の Host ヘッダ制約」参照）"
             echo "- スクリーンショット: \`webtunnel screenshot ${SESSION}\`"
             echo "- Chromium が開いた URL: \`${START_URL}\`"

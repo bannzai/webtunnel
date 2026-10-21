@@ -198,7 +198,7 @@ if [ -z "$CDP" ]; then
   if cdp_out=$(with_deadline bash "${SCRIPT_DIR}/webtunnel-cli.sh" cdp "$SESSION"); then
     CDP=$(printf '%s\n' "$cdp_out" | awk '/^CDP: / {print $2; exit}')
   fi
-  [ -n "$CDP" ] || fail cdp "webtunnel-${SESSION} が tailnet に無い (準備中か run の終了。webtunnel-cli.sh status ${SESSION} で確認): $(helper_err)"
+  [ -n "$CDP" ] || fail cdp "セッション ${SESSION} のノードが tailnet に無い (準備中か run の終了。webtunnel-cli.sh status ${SESSION} で確認): $(helper_err)"
 fi
 if version=$(with_deadline curl -s -m "$(stage_timeout_s 10)" "${CDP}/json/version") && printf '%s' "$version" | grep -q '"Browser"'; then
   ok cdp "${CDP} ($(printf '%s' "$version" | grep -o '"Browser": *"[^"]*"' | head -1))"
