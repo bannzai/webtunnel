@@ -92,21 +92,51 @@ env:
   # secrets コンテキストは step の if で直接参照できないため、有無だけを env に写して判定に使う
   WEBTUNNEL_HAS_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV != '' }}
 
+# 同名セッションの同時起動を防ぐ（tailnet ホスト名の衝突防止）。
+# auth key の発行 job も待たせるため workflow 単位に置く。session job だけに置くと、後続の run が
+# 先に発行した auth key が前の run の終了待ちの間に失効する。
+# グループは caller リポジトリ単位のため、repo を跨いだ同名セッションは防げない
+# （参照: PROJECT.md「未検証事項・リスク」）
+concurrency:
+  group: browser-session-${{ inputs.session }}
+  cancel-in-progress: false
+
 jobs:
+  # OIDC トークンを発行できるのはこの job だけにし、caller のコード（setup_command / start_command /
+  # setup_script）を一切実行しない。caller のコードが動く session job には id-token を渡さない
+  # （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
+  tailscale-auth-key:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+    outputs:
+      encrypted_auth_key: ${{ steps.mint.outputs.encrypted_auth_key }}
+    steps:
+      # caller リポジトリは checkout しない。runner スクリプトは session job と同じく
+      # この workflow ファイルと同一 repo・同一 commit から取得する
+      - name: webtunnel（runner スクリプト）を checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+
+      - name: Tailscale の auth key を発行
+        id: mint
+        env:
+          TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+          TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+        run: ./runner/mint-tailscale-auth-key.sh
+
   session:
+    needs: tailscale-auth-key
     runs-on: ubuntu-latest
     # 各 step が個別に時間制限を持つため、これは暴走時の最終防衛線
     timeout-minutes: 360
-    # caller が付与した権限を必要最小限まで絞る（Tailscale の OIDC 認証に id-token: write が必要）
+    # caller のコードを実行する job のため、OIDC トークンの発行能力（id-token）を持たせない
     permissions:
-      id-token: write
       contents: read
-    # 同名セッションの同時起動を防ぐ（tailnet ホスト名の衝突防止）。
-    # グループは caller リポジトリ単位のため、repo を跨いだ同名セッションは防げない
-    # （参照: PROJECT.md「未検証事項・リスク」）
-    concurrency:
-      group: browser-session-${{ inputs.session }}
-      cancel-in-progress: false
     steps:
       # 後続 step の START_URL は GITHUB_ENV 経由で渡す（start-chromium.sh が読む env 名）
       - name: 入力を検証して開く URL を決める
@@ -223,14 +253,21 @@ jobs:
         timeout-minutes: 5
         run: ./.webtunnel-runner/runner/start-preview.sh
 
+      - name: Tailscale の auth key を復号
+        id: tailscale-auth-key
+        env:
+          ENCRYPTED_AUTH_KEY: ${{ needs.tailscale-auth-key.outputs.encrypted_auth_key }}
+          TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+        run: ./.webtunnel-runner/runner/decrypt-tailscale-auth-key.sh
+
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
+      # oauth-client-id / audience を渡すと action がこの job で OIDC トークンを発行しようとするため渡さない。
+      # タグ（tag:ci）・ephemeral は auth key 側に付いている
       - name: Tailscale に参加
         uses: tailscale/github-action@780049a30b6ff5c378a9e7b389d15ece7a204888 # v4.1.3
         with:
-          oauth-client-id: ${{ secrets.TS_OIDC_CLIENT_ID }}
-          audience: ${{ secrets.TS_OIDC_AUDIENCE }}
-          tags: tag:ci
+          authkey: ${{ steps.tailscale-auth-key.outputs.auth_key }}
           hostname: webtunnel-${{ inputs.session }}
 
       - name: tailnet へブリッジ

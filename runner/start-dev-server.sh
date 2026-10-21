@@ -55,17 +55,12 @@ fi
 cd "${ROOT}/${WORKING_DIRECTORY}"
 export PORT
 
-# caller のコマンド（依存パッケージの install script を含む）に、この job が持つ
-# OIDC トークン発行能力（id-token: write）を渡さないためのハードニング。
-#   - ACTIONS_ID_TOKEN_REQUEST_*: 現ステップでの発行に直接使う 2 変数を消す
-#   - GITHUB_ENV / GITHUB_PATH / GITHUB_OUTPUT / GITHUB_STATE: caller が後続ステップへ
-#     BASH_ENV 等を注入して発行能力を得る経路を塞ぐため、子プロセスごとに使い捨てファイルへ向ける
-# 完全な隔離ではない（同一 VM・sudo NOPASSWD のため。PROJECT.md「リポジトリ公開に耐える安全性」の残存リスク参照）
+# caller のコマンド（依存パッケージの install script を含む）が GITHUB_ENV 等で後続ステップへ
+# BASH_ENV 等を書き込まないよう、GitHub の永続化ファイルを使い捨てファイルへ向ける。
+# セキュリティ境界ではない（同一 VM・sudo NOPASSWD のため。PROJECT.md「リポジトリ公開に耐える安全性」の 11 参照）
 DECOY_DIR="$WORK/caller-github-files"
 mkdir -p "$DECOY_DIR"
-# caller のコマンドを、OIDC 発行能力を外し GitHub の永続化ファイルをデコイに向けた env で走らせる
 caller_env=(env
-  -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
   GITHUB_ENV="$DECOY_DIR/env"
   GITHUB_PATH="$DECOY_DIR/path"
   GITHUB_OUTPUT="$DECOY_DIR/output"
