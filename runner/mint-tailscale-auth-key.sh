@@ -1,16 +1,18 @@
 #!/bin/bash
 # GitHub の OIDC トークンを Tailscale の workload identity federation で交換し、
-# tag:ci の auth key（single-use・ephemeral・preauthorized）を発行して、暗号化した値を
-# step output `encrypted_auth_key` に書く。
+# tag:ci の auth key（single-use・ephemeral・preauthorized）を発行して AUTH_KEY_FILE に書き、
+# その sha256 を step output `auth_key_sha256` に書く。ファイルは workflow が actions/cache で session job へ渡す。
 # caller のコードを一切実行しない job（id-token: write を持つ唯一の job）から呼ぶ。
-# auth key を平文で job output にしないのは、add-mask した値は job output から落とされ、
-# 落とされない平文は受け取る側の step の env 表示として public な run のログに出るため
-# （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）。
+# auth key を job output にしないのは、add-mask した値は job output から落とされ、落とされない値は
+# 受け取る側の step の env 表示として public な run のログに出るため。暗号化して output にする方法は、
+# 復号の鍵を session job（caller のコードが読める）に渡すことになり、鍵が一度漏れると以後の run の
+# ログの暗号文をすべて復号できてしまうため採らない（参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）。
 # env: TS_OIDC_CLIENT_ID / TS_OIDC_AUDIENCE / ACTIONS_ID_TOKEN_REQUEST_URL /
-#      ACTIONS_ID_TOKEN_REQUEST_TOKEN / GITHUB_RUN_ID / GITHUB_OUTPUT
+#      ACTIONS_ID_TOKEN_REQUEST_TOKEN / AUTH_KEY_FILE / GITHUB_OUTPUT
 set -euo pipefail
 
 : "${TS_OIDC_CLIENT_ID:?TS_OIDC_CLIENT_ID が未設定}"
+: "${AUTH_KEY_FILE:?AUTH_KEY_FILE が未設定}"
 : "${TS_OIDC_AUDIENCE:?TS_OIDC_AUDIENCE が未設定}"
 : "${ACTIONS_ID_TOKEN_REQUEST_URL:?id-token: write が付与されていない（OIDC トークンを発行できない）}"
 TS_API="${TS_API:-https://api.tailscale.com/api/v2}"
@@ -57,13 +59,7 @@ auth_key="$(jq -n --argjson expiry "$AUTH_KEY_EXPIRY_SECONDS" '{
 }
 echo "::add-mask::${auth_key}"
 
-# 鍵とパスフレーズは argv（/proc/*/cmdline）に出さず、builtin の printf と env 経由で渡す。
-# パスフレーズの組み立ては decrypt-tailscale-auth-key.sh と一致させる
-{
-  printf 'encrypted_auth_key='
-  printf '%s' "$auth_key" |
-    WEBTUNNEL_AUTH_KEY_PASSPHRASE="${TS_OIDC_CLIENT_ID}:${GITHUB_RUN_ID}" \
-      openssl enc -aes-256-cbc -pbkdf2 -salt -a -A -pass env:WEBTUNNEL_AUTH_KEY_PASSPHRASE
-  echo
-} >> "$GITHUB_OUTPUT"
+# 鍵は argv（/proc/*/cmdline）に出さず、builtin の printf でファイルに書く
+(umask 077 && printf '%s' "$auth_key" > "$AUTH_KEY_FILE")
+echo "auth_key_sha256=$(sha256sum "$AUTH_KEY_FILE" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
 echo "tag:ci の auth key を発行した（有効期限 ${AUTH_KEY_EXPIRY_SECONDS} 秒・single-use・ephemeral）"

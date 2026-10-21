@@ -1,26 +1,26 @@
 #!/bin/bash
-# mint-tailscale-auth-key.sh が暗号化した auth key を復号し、add-mask に登録してから
-# step output `auth_key` に書く（tailscale/github-action の authkey input に渡す）。
-# 復号は tailnet 参加の直前の step で行い、env に置いて後続 step のプロセスへ引き継がない。
-# env: ENCRYPTED_AUTH_KEY / MINTED_RUN_ATTEMPT / TS_OIDC_CLIENT_ID / GITHUB_RUN_ATTEMPT / GITHUB_RUN_ID / GITHUB_OUTPUT
+# actions/cache で受け取った auth key のファイル（mint-tailscale-auth-key.sh が書いたもの）を読み、
+# sha256 が発行 job の output と一致することを確かめ、add-mask に登録してから step output `auth_key` に書く
+# （tailscale/github-action の authkey input に渡す）。読んだファイルは消す。
+# tailnet 参加の直前の step で実行し、env に置いて後続 step のプロセスへ引き継がない。
+# env: AUTH_KEY_FILE / AUTH_KEY_SHA256 / GITHUB_OUTPUT
 set -euo pipefail
 
-: "${ENCRYPTED_AUTH_KEY:?ENCRYPTED_AUTH_KEY が空（auth key 発行 job の output を受け取れていない）}"
-: "${TS_OIDC_CLIENT_ID:?TS_OIDC_CLIENT_ID が未設定}"
-
-# auth key は single-use で有効期限も短いため、前の試行で発行したものは使えない
-if [ "${MINTED_RUN_ATTEMPT:-}" != "${GITHUB_RUN_ATTEMPT:-}" ]; then
-  echo "::error::auth key は試行 ${MINTED_RUN_ATTEMPT:-?} で発行したもので、現在の試行 ${GITHUB_RUN_ATTEMPT:-?} では使えない（使用済みか失効済み）。session job だけでなく「Re-run all jobs」（gh run rerun <run ID>、--failed なし）で再実行する" >&2
-  exit 1
-fi
-
-# パスフレーズの組み立ては mint-tailscale-auth-key.sh と一致させる
-auth_key="$(printf '%s' "$ENCRYPTED_AUTH_KEY" |
-  WEBTUNNEL_AUTH_KEY_PASSPHRASE="${TS_OIDC_CLIENT_ID}:${GITHUB_RUN_ID}" \
-    openssl enc -d -aes-256-cbc -pbkdf2 -a -A -pass env:WEBTUNNEL_AUTH_KEY_PASSPHRASE)"
-[ -n "$auth_key" ] || {
-  echo "auth key を復号できなかった" >&2
+: "${AUTH_KEY_FILE:?AUTH_KEY_FILE が未設定}"
+: "${AUTH_KEY_SHA256:?AUTH_KEY_SHA256 が空（auth key 発行 job の output を受け取れていない）}"
+[ -s "$AUTH_KEY_FILE" ] || {
+  echo "auth key のファイルが無い（cache から復元できていない）" >&2
   exit 1
 }
+
+# cache のエントリは先に保存したものが残るため、caller repo の別の workflow が同じ key で先に置いた
+# ファイルは sha256 の違いで止める
+if [ "$(sha256sum "$AUTH_KEY_FILE" | cut -d ' ' -f 1)" != "$AUTH_KEY_SHA256" ]; then
+  rm -f "$AUTH_KEY_FILE"
+  echo "::error::cache から復元した auth key が発行 job の発行したものと一致しない" >&2
+  exit 1
+fi
+auth_key="$(cat "$AUTH_KEY_FILE")"
+rm -f "$AUTH_KEY_FILE"
 echo "::add-mask::${auth_key}"
 echo "auth_key=${auth_key}" >> "$GITHUB_OUTPUT"

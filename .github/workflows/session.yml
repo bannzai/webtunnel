@@ -111,9 +111,9 @@ jobs:
     permissions:
       id-token: write
     outputs:
-      encrypted_auth_key: ${{ steps.mint.outputs.encrypted_auth_key }}
-      # session job だけを再実行すると、この job は再実行されず前回の（使用済みか失効した）auth key が渡る。
-      # decrypt-tailscale-auth-key.sh がこの値と現在の試行番号を比べて検出する
+      auth_key_sha256: ${{ steps.mint.outputs.auth_key_sha256 }}
+      # session job だけを再実行すると、この job は再実行されず前回の（使用済みか失効した）auth key しか無い。
+      # session job がこの値と現在の試行番号を比べて検出する
       minted_run_attempt: ${{ github.run_attempt }}
     steps:
       # caller リポジトリは checkout しない。runner スクリプトは session job と同じく
@@ -130,7 +130,17 @@ jobs:
         env:
           TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
           TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
+          AUTH_KEY_FILE: ${{ runner.temp }}/webtunnel-tailscale-auth-key
         run: ./runner/mint-tailscale-auth-key.sh
+
+      # auth key を session job へ渡す。job output は public な run のログに出るため使わない。
+      # cache は UI・REST API から中身を取得できず、取得できるのは caller repo の workflow の run だけ
+      # （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
+      - name: auth key を session job へ渡す
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/webtunnel-tailscale-auth-key
+          key: webtunnel-tailscale-auth-key-${{ github.run_id }}-${{ github.run_attempt }}
 
   session:
     needs: tailscale-auth-key
@@ -256,13 +266,29 @@ jobs:
         timeout-minutes: 5
         run: ./.webtunnel-runner/runner/start-preview.sh
 
-      - name: Tailscale の auth key を復号
+      # auth key は single-use で有効期限も短いため、前の試行で発行したものは使えない
+      - name: auth key を発行した試行を確認
+        env:
+          MINTED_RUN_ATTEMPT: ${{ needs.tailscale-auth-key.outputs.minted_run_attempt }}
+        run: |
+          if [ "$MINTED_RUN_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
+            echo "::error::auth key は試行 ${MINTED_RUN_ATTEMPT} で発行したもので、現在の試行 ${GITHUB_RUN_ATTEMPT} では使えない（使用済みか失効済み）。session job だけでなく「Re-run all jobs」（gh run rerun <run ID>、--failed なし）で再実行する"
+            exit 1
+          fi
+
+      - name: auth key を受け取る
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/webtunnel-tailscale-auth-key
+          key: webtunnel-tailscale-auth-key-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+
+      - name: auth key を読む
         id: tailscale-auth-key
         env:
-          ENCRYPTED_AUTH_KEY: ${{ needs.tailscale-auth-key.outputs.encrypted_auth_key }}
-          MINTED_RUN_ATTEMPT: ${{ needs.tailscale-auth-key.outputs.minted_run_attempt }}
-          TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
-        run: ./.webtunnel-runner/runner/decrypt-tailscale-auth-key.sh
+          AUTH_KEY_FILE: ${{ runner.temp }}/webtunnel-tailscale-auth-key
+          AUTH_KEY_SHA256: ${{ needs.tailscale-auth-key.outputs.auth_key_sha256 }}
+        run: ./.webtunnel-runner/runner/read-tailscale-auth-key.sh
 
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
