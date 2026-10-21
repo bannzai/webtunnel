@@ -14,7 +14,8 @@
 #   webtunnel screenshot <session> [出力パス]  # agent-browser 経由でスクリーンショットを保存
 #
 # CDP は Host ヘッダが IP か localhost 以外のリクエストを拒否するため、
-# MagicDNS 名（webtunnel-<session>）ではなく tailscale IP で接続する（PROJECT.md「CDP の Host ヘッダ制約」参照）。
+# MagicDNS 名（webtunnel-<session>-<run id>）ではなく tailscale IP で接続する（PROJECT.md「CDP の Host ヘッダ制約」参照）。
+# 接続先の IP の解決に jq を使う。
 #
 # 対象リポジトリの切り替え（各アプリ repo の caller workflow を叩く場合）:
 #   WEBTUNNEL_REPO=<owner>/<repo> [WEBTUNNEL_WORKFLOW=browser-session.yml] webtunnel up <session>
@@ -33,10 +34,21 @@ ts_bin() {
   fi
 }
 
-# tailnet に参加している webtunnel-<session> の IP を返す（未参加なら空）
+# 自分の run のノード（tag:ci が付き、ホスト名が webtunnel-<session>-<起動中の run id>）の IPv4 を返す（無ければ空）。
+# ホスト名は誰でも名乗れるため、OIDC で参加したノードにしか付かない tag:ci と、GitHub 上で起動中の run id の
+# 両方で身元を確かめる（参照: PROJECT.md「接続先ノードの検証」）。run 一覧を取得できない時は名前だけで決めず空を返す
 session_ip() {
-  local session=$1
-  "$(ts_bin)" status 2>/dev/null | awk -v h="webtunnel-${session}" '$2 == h {print $1; exit}'
+  local session=$1 ids
+  ids=$(session_run_ids "$session") || return 0
+  [ -n "$ids" ] || return 0
+  "$(ts_bin)" status --json 2>/dev/null | jq -r --arg prefix "webtunnel-${session}-" --arg ids "$ids" '
+    ($ids | split("\n") | map(select(. != ""))) as $runs
+    | [(.Peer // {})[]
+       | select((.Tags // []) | index("tag:ci"))
+       | select((.HostName // "") | startswith($prefix))
+       | select((.HostName | ltrimstr($prefix)) as $id | $runs | index($id))]
+    | sort_by(.Online | not)
+    | [(.[0].TailscaleIPs // [])[] | select(test("^[0-9.]+$"))][0] // empty'
 }
 
 # session 名に一致する実行中/待機中の run ID を列挙する。GitHub API の失敗 (一時エラー・レート制限) は
@@ -69,12 +81,18 @@ cmd_up() {
     esac
   done
 
-  if [ -n "$(session_ip "$session")" ]; then
-    echo "セッション ${session} はすでに tailnet に存在する（冪等: 何もしない）"
-    return 0
-  fi
-  if [ -n "$(session_run_ids "$session")" ]; then
-    echo "セッション ${session} の run はすでに起動中（準備中の可能性。webtunnel status ${session} で確認）"
+  # run 一覧を取得できないまま dispatch すると、稼働中のセッションに重ねて run を起動しうるため中断する
+  local ids
+  ids=$(session_run_ids "$session") || {
+    echo "GitHub API から run 一覧を取得できない（一時エラーの可能性）。時間をおいて再実行する" >&2
+    return 1
+  }
+  if [ -n "$ids" ]; then
+    if [ -n "$(session_ip "$session")" ]; then
+      echo "セッション ${session} はすでに tailnet に存在する（冪等: 何もしない）"
+    else
+      echo "セッション ${session} の run はすでに起動中（準備中の可能性。webtunnel status ${session} で確認）"
+    fi
     return 0
   fi
 
@@ -176,7 +194,10 @@ cmd_down() {
 
 cmd_list() {
   echo "== tailnet 上のセッション =="
-  "$(ts_bin)" status 2>/dev/null | awk '$2 ~ /^webtunnel-/ {print $2 "  " $1}' | sort
+  "$(ts_bin)" status --json 2>/dev/null | jq -r '(.Peer // {})[]
+    | select((.Tags // []) | index("tag:ci"))
+    | select((.HostName // "") | startswith("webtunnel-"))
+    | "\(.HostName)  \((.TailscaleIPs // [])[0] // "")"' | sort
   echo ""
   echo "== workflow run（直近 10 件）=="
   gh run list -R "$REPO" --workflow "$WORKFLOW" -L 10
@@ -248,7 +269,7 @@ main() {
       cmd_list
       ;;
     *)
-      sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
       exit 1
       ;;
   esac

@@ -21,16 +21,36 @@ assert() {
   fi
 }
 
-# tailnet に誰もいない状態（session_ip が空）を作る
+# tailscale スタブ: TS_STUB_READY_AFTER 回目以降の status --json で、run 123 のノード（tag:ci）を返す
+# （呼び出し回数を TS_STUB_COUNT_FILE で数える）
 cat > "$TMP/tailscale" <<'EOF'
 #!/usr/bin/env bash
-exit 0
+count_file="${TS_STUB_COUNT_FILE:-/dev/null}"
+n=$(cat "$count_file" 2>/dev/null)
+n=${n:-0}
+echo $((n + 1)) > "$count_file"
+if [ "$n" -ge "${TS_STUB_READY_AFTER:-0}" ]; then
+  echo '{"Peer":{"k1":{"HostName":"webtunnel-dev-123","Tags":["tag:ci"],"Online":true,"TailscaleIPs":["100.64.0.1","fd7a:115c:a1e0::1"]}}}'
+else
+  echo '{"Peer":{}}'
+fi
 EOF
-# run list は空（起動中の run なし）、workflow run は受け取った引数を記録する
+# gh スタブ: workflow run は受け取った引数を記録する。run list は dispatch 前なら起動中の run なし、
+# dispatch 後は GH_STUB_RUN_LIST_FAILS 回失敗し、続く GH_STUB_RUN_LIST_EMPTY 回は空を返してから run 123 を返す
+# （GH_STUB_NO_RUN=1 なら空を返し続ける）
 cat > "$TMP/gh" <<'EOF'
 #!/usr/bin/env bash
 case "$1 $2" in
   "workflow run") printf '%s\n' "$@" > "${GH_STUB_LOG}" ;;
+  "run list")
+    [ -f "${GH_STUB_LOG}" ] || exit 0
+    n=$(cat "${GH_STUB_LOG}.runlist" 2>/dev/null || echo 0)
+    echo $((n + 1)) > "${GH_STUB_LOG}.runlist"
+    fails=${GH_STUB_RUN_LIST_FAILS:-0}
+    [ "$n" -ge "$fails" ] || exit 1
+    [ "$n" -ge $((fails + ${GH_STUB_RUN_LIST_EMPTY:-0})) ] || exit 0
+    [ "${GH_STUB_NO_RUN:-0}" = "1" ] || echo 123
+    ;;
   *) exit 0 ;;
 esac
 EOF
@@ -38,6 +58,7 @@ chmod +x "$TMP/tailscale" "$TMP/gh"
 
 # up を実行し、gh workflow run に渡った引数を 1 行 1 引数で返す
 dispatched_args() {
+  rm -f "$TMP/dispatch.log" "$TMP/dispatch.log.runlist"
   GH_STUB_LOG="$TMP/dispatch.log" PATH="$TMP:$PATH" bash "$CLI" up "$@" >/dev/null 2>&1
   cat "$TMP/dispatch.log"
 }
@@ -60,6 +81,36 @@ case "$out" in
   *) assert "不明なオプションの理由を出力する" "found" "missing: ${out}" ;;
 esac
 
+# --- up の冪等判定 --------------------------------------------------------------------------------
+# 自分の run のノードが tailnet にあれば dispatch しない
+rm -f "$TMP/dispatch.log.runlist"
+printf 'workflow\nrun\n' > "$TMP/dispatch.log"
+out=$(GH_STUB_LOG="$TMP/dispatch.log" PATH="$TMP:$PATH" bash "$CLI" up dev 2>&1)
+code=$?
+assert "自分の run のノードがあれば up は exit 0" "0" "$code"
+case "$out" in
+  *"すでに tailnet に存在する"*) assert "自分の run のノードがあれば dispatch しない" "found" "found" ;;
+  *) assert "自分の run のノードがあれば dispatch しない" "found" "missing: ${out}" ;;
+esac
+
+# run 一覧を取得できない時は、稼働中のセッションに重ねて dispatch しないよう中断する
+cat > "$TMP/gh-fail" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "workflow run") printf '%s\n' "$@" > "${GH_STUB_LOG}" ;;
+  "run list") exit 1 ;;
+  *) exit 0 ;;
+esac
+EOF
+mkdir -p "$TMP/fail-bin"
+cp "$TMP/gh-fail" "$TMP/fail-bin/gh"
+chmod +x "$TMP/fail-bin/gh"
+rm -f "$TMP/dispatch.log"
+out=$(GH_STUB_LOG="$TMP/dispatch.log" PATH="$TMP/fail-bin:$TMP:$PATH" bash "$CLI" up dev 2>&1)
+code=$?
+assert "run 一覧を取得できない時の up は exit 1" "1" "$code"
+assert "run 一覧を取得できない時の up は dispatch しない" "0" "$( [ -f "$TMP/dispatch.log" ] && echo 1 || echo 0 )"
+
 # --- up --wait 後の診断と、待機中の GitHub API 失敗の扱い ---------------------------------------
 # curl スタブ: CDP の /json/version が応答する
 cat > "$TMP/curl" <<'EOF'
@@ -72,20 +123,10 @@ cat > "$TMP/doctor.sh" <<'EOF'
 printf '%s\n' "$@" > "${DOCTOR_STUB_LOG}"
 echo "ALL_OK"
 EOF
-# tailscale スタブ: up が「tailnet に無い → dispatch → wait → ready」の経路を通るよう、
-# 最初の呼び出しは空、2 回目以降は webtunnel-dev の IP を返す（呼び出し回数を TS_STUB_COUNT_FILE で数える）
-cat > "$TMP/tailscale" <<'EOF'
-#!/usr/bin/env bash
-count_file="${TS_STUB_COUNT_FILE:?}"
-n=$(cat "$count_file" 2>/dev/null || echo 0)
-echo $((n + 1)) > "$count_file"
-[ "$n" -ge 1 ] && printf '%s webtunnel-%s linux -\n' "100.64.0.1" "dev"
-exit 0
-EOF
-chmod +x "$TMP/curl" "$TMP/doctor.sh" "$TMP/tailscale"
+chmod +x "$TMP/curl" "$TMP/doctor.sh"
 
 run_up_wait() {
-  rm -f "$TMP/ts-count" "$TMP/doctor.log"
+  rm -f "$TMP/ts-count" "$TMP/doctor.log" "$TMP/dispatch.log" "$TMP/dispatch.log.runlist"
   TS_STUB_COUNT_FILE="$TMP/ts-count" DOCTOR_STUB_LOG="$TMP/doctor.log" GH_STUB_LOG="$TMP/dispatch.log" \
     WEBTUNNEL_DOCTOR="$TMP/doctor.sh" WEBTUNNEL_WAIT_INTERVAL=0 WEBTUNNEL_WAIT_GRACE="${WAIT_GRACE:-0}" PATH="$TMP:$PATH" "$@" \
     bash "$CLI" up dev --wait ${UP_EXTRA[@]+"${UP_EXTRA[@]}"} 2>&1
@@ -126,27 +167,9 @@ case "$out" in
 esac
 
 # 待機中に GitHub API が失敗しても「run が無い」と誤報せず待機を続け、ready で終わる
-# （猶予 WEBTUNNEL_WAIT_GRACE=0 のため 2 回目以降の確認で run の存在チェックが走る）
-cat > "$TMP/tailscale" <<'EOF'
-#!/usr/bin/env bash
-count_file="${TS_STUB_COUNT_FILE:?}"
-n=$(cat "$count_file" 2>/dev/null || echo 0)
-echo $((n + 1)) > "$count_file"
-# 6 回目以降で ready（それまでは run 存在チェックが走る）
-[ "$n" -ge 6 ] && printf '%s webtunnel-%s linux -\n' "100.64.0.1" "dev"
-exit 0
-EOF
-cat > "$TMP/gh" <<'EOF'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "workflow run") printf '%s\n' "$@" > "${GH_STUB_LOG}" ;;
-  "run list") exit 1 ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$TMP/tailscale" "$TMP/gh"
+# （猶予 WEBTUNNEL_WAIT_GRACE=0 のため、各確認で run の存在チェックが走る）
 UP_EXTRA=()
-out=$(run_up_wait)
+out=$(run_up_wait env GH_STUB_RUN_LIST_FAILS=4)
 code=$?
 assert "待機中の GitHub API 失敗では run 不在と判断せず ready まで待つ" "0" "$code"
 case "$out" in
@@ -159,15 +182,7 @@ case "$out" in
 esac
 
 # run 一覧が空（取得は成功）なら run 不在として終了する
-cat > "$TMP/gh" <<'EOF'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "workflow run") printf '%s\n' "$@" > "${GH_STUB_LOG}" ;;
-  *) exit 0 ;;
-esac
-EOF
-chmod +x "$TMP/gh"
-out=$(run_up_wait)
+out=$(run_up_wait env GH_STUB_NO_RUN=1)
 code=$?
 assert "run 一覧が空なら run 不在として exit 1" "1" "$code"
 case "$out" in
@@ -176,8 +191,8 @@ case "$out" in
 esac
 
 # 猶予 (WEBTUNNEL_WAIT_GRACE) の間は run 一覧が空でも不在と判定せず、経過時間で判定する
-# （確認間隔 0 秒で 6 回の確認が猶予 5 秒より先に終わるため、猶予中に ready になり exit 0 になる）
-out=$(WAIT_GRACE=5 run_up_wait)
+# （確認間隔 0 秒で 6 回の確認が猶予 5 秒より先に終わるため、猶予中に run が一覧に現れて ready になり exit 0 になる）
+out=$(WAIT_GRACE=5 run_up_wait env GH_STUB_RUN_LIST_EMPTY=6)
 code=$?
 assert "猶予の間は run 一覧が空でも不在と判定せず ready まで待つ" "0" "$code"
 case "$out" in
