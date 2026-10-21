@@ -144,7 +144,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: webtunnel-session-public-key-${{ github.run_attempt }}
+          name: webtunnel-session-public-key-${{ inputs.session }}-${{ github.run_attempt }}
           path: webtunnel-handoff
       - &wait-session-public-key
         name: session job の公開鍵を待つ
@@ -202,7 +202,7 @@ jobs:
       - name: 暗号化した auth key を session job へ渡す
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: webtunnel-encrypted-auth-key-${{ github.run_attempt }}
+          name: webtunnel-encrypted-auth-key-${{ inputs.session }}-${{ github.run_attempt }}
           path: webtunnel-handoff/out/encrypted-auth-key.bin
           # session job が受け取った後は使わない。最短の 1 日にする
           retention-days: 1
@@ -300,7 +300,7 @@ jobs:
         id: upload-session-public-key
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: webtunnel-session-public-key-${{ github.run_attempt }}
+          name: webtunnel-session-public-key-${{ inputs.session }}-${{ github.run_attempt }}
           path: .webtunnel-runner/handoff/session-public-key.pem
           # tailscale-auth-key job が受け取った後は使わない。最短の 1 日にする
           retention-days: 1
@@ -366,7 +366,7 @@ jobs:
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: webtunnel-encrypted-auth-key-${{ github.run_attempt }}
+          name: webtunnel-encrypted-auth-key-${{ inputs.session }}-${{ github.run_attempt }}
           path: .webtunnel-runner/handoff
       - &wait-encrypted-auth-key
         name: 暗号化した auth key を待つ
@@ -515,7 +515,7 @@ jobs:
         if: failure() && steps.upload-session-public-key.outcome != 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: webtunnel-session-public-key-${{ github.run_attempt }}
+          name: webtunnel-session-public-key-${{ inputs.session }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/webtunnel-handoff-abort/session-aborted
           retention-days: 1
 
