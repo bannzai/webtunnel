@@ -88,7 +88,7 @@ else
 
   # Tailscale 側の trust credential の Subject は API で読めないため、Secrets の存在以上の判定はできない。
   # 代わりにこの repo の OIDC subject 接頭辞と形式、必要な Subject を明示して人が突き合わせられるようにする
-  # (他の repo 用に発行した credential の値を流用すると、形式が違えば「Tailscale に参加」が 403 になる)
+  # (他の repo 用に発行した credential の値を流用すると、形式が違えば「Tailscale の auth key を発行」が 403 になる)
   if sub_prefix=$(gh api "repos/${REPO}/actions/oidc/customization/sub" --jq '.sub_claim_prefix' 2>/dev/null) && [ -n "$sub_prefix" ]; then
     case "$sub_prefix" in
       repo:*@*/*@*) sub_format="immutable ID 形式 (2026-07-15 以降に作成・rename・transfer された repo、または immutable subject に opt-in した repo)" ;;
@@ -96,7 +96,7 @@ else
       *)            sub_format="" ;;
     esac
     if [ -n "$sub_format" ]; then
-      ok "oidc-subject" "接頭辞 ${sub_prefix} は ${sub_format}。trust credential の Subject は ${sub_prefix}:* にする (他の repo 用に発行した credential の値を流用しても形式が違えば「Tailscale に参加」が token exchange failed with status 403 になる)"
+      ok "oidc-subject" "接頭辞 ${sub_prefix} は ${sub_format}。trust credential の Subject は ${sub_prefix}:* にする (他の repo 用に発行した credential の値を流用しても形式が違えば「Tailscale の auth key を発行」が token exchange failed with status 403 になる)"
     else
       warn "oidc-subject" "接頭辞 ${sub_prefix} は未知の形式。trust credential の Subject は ${sub_prefix}:* にする (PROJECT.md「OIDC subject は immutable ID 形式になる」参照)"
     fi

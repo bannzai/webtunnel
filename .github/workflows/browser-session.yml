@@ -49,7 +49,8 @@ on:
 
 jobs:
   session:
-    # id-token: write が必要なのは reusable workflow を呼ぶこの job だけのため、job 単位で最小権限にする
+    # reusable workflow の job が持てる権限はここで付与した分が上限になるため、job 単位で最小権限にする。
+    # id-token: write を使うのは session.yml の auth key 発行 job だけで、caller のコードを実行する job には渡らない
     permissions:
       id-token: write # Tailscale の OIDC (workload identity federation) 認証に必要
       contents: read

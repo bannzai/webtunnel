@@ -133,7 +133,7 @@ JSON
 
 # --no-sandbox: 使い捨て VM 上の動作確認用ブラウザのため sandbox 無効化のリスクを許容し、
 #               runner のカーネル設定（unprivileged userns 制限）由来の起動失敗を避ける
-# --remote-allow-origins=*: ローカルの DevTools フロントエンド等、Origin 付き WebSocket 接続を許可する
+# --remote-allow-origins は付けない（PROJECT.md「リポジトリ公開に耐える安全性」の 15）
 DISPLAY="$DISPLAY_NUM" nohup "$CHROME_BIN" \
   --remote-debugging-port="$CDP_PORT" \
   --user-data-dir="$WORK/chrome-profile" \
@@ -141,23 +141,22 @@ DISPLAY="$DISPLAY_NUM" nohup "$CHROME_BIN" \
   --no-default-browser-check \
   --disable-dev-shm-usage \
   --no-sandbox \
-  --remote-allow-origins='*' \
   --window-position=0,0 \
   --window-size="$WINDOW_SIZE" \
   ${EXTENSION_ARGS[@]+"${EXTENSION_ARGS[@]}"} \
   ${SOFTWARE_WEBGL_ARGS[@]+"${SOFTWARE_WEBGL_ARGS[@]}"} \
   "$START_URL" >"$WORK/chrome.log" 2>&1 &
 
+# /json/version の応答と chrome.log の「DevTools listening on ws://...」は CDP の WebSocket URL を含むため
+# public の Actions ログに出さない（PROJECT.md「リポジトリ公開に耐える安全性」の 15）
 echo "CDP の応答を待機中..."
 for _ in $(seq 1 30); do
   if curl -s -m 3 "http://127.0.0.1:${CDP_PORT}/json/version" >/dev/null; then
-    curl -s -m 3 "http://127.0.0.1:${CDP_PORT}/json/version"
-    echo ""
     echo "ready: http://127.0.0.1:${CDP_PORT}"
     exit 0
   fi
   sleep 2
 done
 echo "CDP が応答しない" >&2
-tail -n 60 "$WORK/chrome.log" >&2
+tail -n 60 "$WORK/chrome.log" | grep -v 'DevTools listening on' >&2 || true
 exit 1
