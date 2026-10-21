@@ -8,7 +8,7 @@ set -euo pipefail
 : "${SESSION_PRIVATE_KEY_FILE:?SESSION_PRIVATE_KEY_FILE が未設定}"
 : "${ENCRYPTED_AUTH_KEY_FILE:?ENCRYPTED_AUTH_KEY_FILE が未設定}"
 [ -s "$ENCRYPTED_AUTH_KEY_FILE" ] || {
-  echo "::error::暗号化した auth key を受け取れなかった（tailscale-auth-key job の失敗か、待ちの打ち切り）。session job だけを再実行した場合は、「Re-run all jobs」（gh run rerun <run ID>、--failed なし）で再実行する" >&2
+  echo "::error::暗号化した auth key を受け取れなかった（tailscale-auth-key job の失敗か、待ちの打ち切り）。re-run ではなく workflow_dispatch で新しい run を起動する（local/webtunnel up）" >&2
   exit 1
 }
 

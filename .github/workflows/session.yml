@@ -115,6 +115,15 @@ jobs:
     permissions:
       id-token: write
     steps:
+      # re-run（2 回目以降の試行）では auth key を発行しない。artifact の名前空間は同じ run の試行で共有され、
+      # 前の試行の caller のコードが ACTIONS_RUNTIME_TOKEN で次の試行の公開鍵の artifact を先に置けるため、
+      # 発行 job が攻撃者の公開鍵で暗号化してしまう（参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
+      - name: re-run では発行しない
+        if: github.run_attempt != '1'
+        run: |
+          echo "::error::re-run では Tailscale の auth key を発行しない。workflow_dispatch で新しい run を起動する（local/webtunnel up）"
+          exit 1
+
       # caller リポジトリは checkout しない。runner スクリプトは session job と同じく
       # この workflow ファイルと同一 repo・同一 commit から取得する
       - name: webtunnel（runner スクリプト）を checkout
@@ -254,6 +263,13 @@ jobs:
 
       # checkout はパス先の既存内容を消すため、万一 caller リポジトリが同名ディレクトリを持つ場合は
       # 黙って上書きせず、ここで明確に失敗させる
+      # tailscale-auth-key job は re-run では発行しないため、待たずに止める
+      - name: re-run では始めない
+        if: github.run_attempt != '1'
+        run: |
+          echo "::error::re-run では Tailscale の auth key を受け取れない。workflow_dispatch で新しい run を起動する（local/webtunnel up）"
+          exit 1
+
       - name: runner スクリプトの checkout 先が空いていることを確認
         run: |
           [ ! -e .webtunnel-runner ] || {
