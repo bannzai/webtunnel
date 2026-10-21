@@ -3,7 +3,9 @@
 
 webtunnel の「ログイン済み状態でセッションを開始する」経路を、外部サービスの
 アカウントを使わずに end-to-end で検証するためだけに存在する。
-資格情報は環境変数 WEBTUNNEL_DEMO_USERNAME / WEBTUNNEL_DEMO_PASSWORD で受け取る。
+資格情報は標準入力の 1 行目（ユーザー名）と 2 行目（パスワード）で受け取る。
+環境変数で受け取らないのは、復号済みの資格情報を環境に持つ常駐プロセスを
+run-auth-setup.sh がセットアップ後に止めるため。
 """
 import http.server
 import os
@@ -12,8 +14,8 @@ import sys
 import urllib.parse
 
 PORT = int(os.environ.get("WEBTUNNEL_DEMO_PORT", "8123"))
-USERNAME = os.environ.get("WEBTUNNEL_DEMO_USERNAME", "")
-PASSWORD = os.environ.get("WEBTUNNEL_DEMO_PASSWORD", "")
+USERNAME = sys.stdin.readline().rstrip("\n")
+PASSWORD = sys.stdin.readline().rstrip("\n")
 COOKIE_NAME = "webtunnel_demo_session"
 # パスワードそのものを cookie に載せないよう、起動ごとのランダム値をセッション鍵にする
 SESSION_TOKEN = secrets.token_urlsafe(16)
@@ -89,5 +91,5 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     if not USERNAME or not PASSWORD:
-        sys.exit("WEBTUNNEL_DEMO_USERNAME / WEBTUNNEL_DEMO_PASSWORD が未設定")
+        sys.exit("標準入力からユーザー名とパスワードを読めなかった")
     http.server.ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

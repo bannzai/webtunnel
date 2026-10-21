@@ -99,7 +99,7 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - `start_url` を省略した時は `http://localhost:<port>/` を開く。dev サーバを起動しない場合だけ `about:blank` になる
 - dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える
 - **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
-- **caller のコマンドに OIDC トークンの発行能力を渡さないハードニング**。`id-token: write` の job で `setup_command` が走らせる依存パッケージの install script が Tailscale の trust credential に使える token を発行するのを防ぐ。start-dev-server.sh は `ACTIONS_ID_TOKEN_REQUEST_*` を外し、`GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行する（完全な隔離ではない。「リポジトリ公開に耐える安全性」の残存リスク参照）
+- **caller のコマンドを実行する job に OIDC トークンの発行能力を持たせない**。`setup_command` / `start_command` を実行する session job の `permissions` に `id-token` は無く、Tailscale の auth key は caller のコードを実行しない別 job が発行する（「リポジトリ公開に耐える安全性」の 11）。start-dev-server.sh は `GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行するが、これはセキュリティ境界ではない
 - **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
 - **runner スクリプトの checkout は `.webtunnel-runner` に置く**。checkout はパス先の既存内容を消すため、caller リポジトリに実在しうる名前を避ける。`.webtunnel/` はログイン用セットアップスクリプト（`.webtunnel/setup.sh`。「ログイン済み状態でのセッション開始」参照）の置き場所として caller 側に予約するため checkout 先にしない。それでも `.webtunnel-runner` が存在する場合は checkout 前に検出して失敗させる（黙って caller の内容を消さない）
 - **`up --wait` の待機は既定 40 分**（`WEBTUNNEL_WAIT_MINUTES` で変更可）。dev サーバ起動 15 分 + Chromium 起動 10 分 + セッション初期化（ログイン）15 分の step 上限と Tailscale のセットアップを覆う。run が消えた場合は即終了するため、長い既定でも失敗検知は遅れない。run が失敗・cancel で消えた場合は締め切りを待たずに終了する
@@ -144,8 +144,8 @@ ubuntu-latest の Xvfb 上の headed Chromium は、既定では WebGL2 が無�
 - **自動検出**: caller repo に `.webtunnel/setup.sh` があれば実行、なければスキップ。パスは `setup_script` input で差し替えられる（`local/webtunnel up <session> --setup-script <path>`）
 - **実行順序は dev サーバ・Chromium の起動後 → 録画開始前 → tailnet 参加前**。ログイン対象が runner 上の dev サーバでも到達でき、認証情報の露出を止める要（後述）になる順序であり、入れ替えてはいけない
 - **操作は agent-browser の CDP 接続**: 自前の CDP クライアントは作らない（「操作レイヤー」の判断をそのまま適用）。`run-auth-setup.sh` が runner に agent-browser を版指定で入れ、`WEBTUNNEL_CDP_URL`（`http://127.0.0.1:9222`）を環境変数で渡す。cwd は caller repo の workspace ルート
-- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りはプロセスグループごと行い、ハングした子プロセス（復号済みの資格情報を環境に持つ）を残さない。スクリプトが起動する常駐プロセス（dev サーバ等）は、スクリプト側で `setsid` によりグループから切り離して生かす（`examples/auth-demo/setup.sh` 参照）。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
-- **セットアップスクリプトも `start-dev-server.sh` と同じハードニングで実行する**: OIDC 発行能力（`ACTIONS_ID_TOKEN_REQUEST_*`）を外し、GitHub の永続化ファイル（`GITHUB_ENV` 等）をデコイに向けた env で走らせる（「リポジトリ公開に耐える安全性」の 11 参照）
+- **セットアップの失敗でセッションを潰さない**: 失敗しても run summary に警告を出してセッションは開く。ローカルの agent-browser から手動でログインする余地が残るため、セッション自体の価値は失われない。ハングも同様で、打ち切りは step の `timeout-minutes` ではなくスクリプト内の `timeout`（agent-browser のインストール 180 秒・セットアップスクリプト 480 秒。`INSTALL_TIMEOUT_SECONDS` / `SETUP_TIMEOUT_SECONDS` で変更可）で行う。step ごと殺されると録画・tailnet 参加・keepalive まで飛んでセッションが開かなくなるため、step の `timeout-minutes: 15` は最終防衛線に留める。セットアップスクリプトの打ち切りはプロセスグループごと行い、ハングした子プロセス（復号済みの資格情報を環境に持つ）を残さない。スクリプトが起動する常駐プロセス（dev サーバ等）は、スクリプト側で `setsid` によりグループから切り離し、**認証情報の環境変数を外して**起動する（`examples/auth-demo/setup.sh` 参照）。スクリプトの終了後（成功・失敗・打ち切りを問わず）、`run-auth-setup.sh` は `/proc/<pid>/environ` に復号した `KEY=VALUE` と一致するエントリを持つプロセス（agent-browser の daemon や、環境変数を外さずに切り離した常駐プロセス）を sudo で走査して SIGKILL で止め、止めたプロセスを run summary に警告する。復号済みの資格情報を環境に持つプロセスを、セッション中に残さないため。**唯一の例外**として、失敗後に画面を about:blank へ戻せたと検証できない場合は、認証情報が録画・preview・CDP に露出しうるためセッションを開かず中断する
+- **セットアップスクリプトも `start-dev-server.sh` と同じ env で実行する**: GitHub の永続化ファイル（`GITHUB_ENV` 等）をデコイに向けた env で走らせる。セキュリティ境界ではない（「リポジトリ公開に耐える安全性」の 11 参照）
 - 実装は `runner/run-auth-setup.sh`、サンプル兼検証用のセットアップスクリプトは `examples/auth-demo/`
 
 #### 認証情報の受け渡し
@@ -202,7 +202,7 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 
 1. **公開エンドポイントゼロ**: CDP（:9222）も preview（:9100）も無認証のため、tailnet 内からしか到達できないようにする。runner 上ではどちらも 127.0.0.1 で待ち受け、tailscale インターフェースへの公開は `bridge.sh` の socat だけが行う
 2. **トリガーは `workflow_dispatch` のみ**: 起動できるのは write 権限者だけ。fork からの PR には Secrets / OIDC トークンの権限が渡らない
-3. **長期シークレットを持たない（OIDC / workload identity federation）**: Tailscale への認証は、GitHub が workflow に発行する短命の OIDC トークンで行う。subject が credential に登録した値に一致する workflow しか認証できず、盗まれて困る静的シークレットがそもそも存在しない（Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` は識別子であり秘密情報ではない）
+3. **長期シークレットを持たない（OIDC / workload identity federation）**: Tailscale への認証は、GitHub が workflow に発行する短命の OIDC トークンで行う。subject が credential に登録した値に一致する workflow しか認証できず、盗まれて困る静的シークレットがそもそも存在しない（Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` は識別子で、それだけでは認証できない。ただし `TS_OIDC_CLIENT_ID` は 11 の auth key の受け渡しの暗号化のパスフレーズにも使うため、公開しない）
 4. **Tailscale ACL で双方向を絞る**: `tag:ci` からの発信は全拒否（simtunnel セットアップ時に設定済みのポリシーをそのまま使う。webtunnel 固有の追加設定は不要）
 5. **ACL 設定 → runner 参加の順序は入れ替え不可**: simtunnel の Phase 0 で設定済みのため webtunnel では新規作業なし
 6. **ephemeral node**: ジョブ終了と同時に tailnet から自動削除される。また workflow は CDP がローカルで応答してから tailnet に参加する（tailnet 内にいる時間を最小化）
@@ -210,7 +210,13 @@ simtunnel の skill（`macos-simtunnel` / `ios-simulator`）は dotfile リポ�
 8. **サードパーティ action は commit SHA で固定**: `uses:` はフルレングスの commit SHA + バージョンコメントで固定する。バージョン更新時は `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` で SHA を確認して書き換える
 9. **runner スクリプトは workflow と同一 commit に固定**: reusable workflow（session.yml）は runner スクリプトを `job.workflow_repository` / `job.workflow_sha` で checkout する。caller が `uses:` を SHA 固定していれば、実行されるスクリプトも同じ SHA に固定される
 10. **録画 artifact は公開される前提で使う**: public リポジトリの artifact はリポジトリの read 権限で取得でき、public repo では GitHub にログインした誰でもダウンロードできる（保持 7 日）。preview・CDP は tailnet 内限定だが、同じ画面が録画にも映るため、セッション画面に映すのは公開されてよい内容に限る。ログイン等の秘匿情報を扱う確認は `up --no-record` で録画を無効にする
-11. **caller のコマンドへ OIDC 発行能力を渡さないハードリング（完全な隔離ではない）**: `session.yml` の job は Tailscale 認証に `id-token: write` を持つため、`setup_command` / `start_command`（依存パッケージの install script を含む）が OIDC トークンを発行できると、tag:ci の auth key を mint できてしまう。`start-dev-server.sh` は caller のコマンドを (a) `ACTIONS_ID_TOKEN_REQUEST_*` を外し、(b) `GITHUB_ENV` / `GITHUB_PATH` / `GITHUB_OUTPUT` / `GITHUB_STATE` を使い捨てファイルへ向けた env で実行し、現ステップでの発行と後続ステップへの環境注入（`BASH_ENV` 等）の両経路を塞ぐ。**ただし同一 VM・`sudo` NOPASSWD のため完全な隔離ではない**（悪意ある caller は別 step のプロセスを覗く等で回避しうる）。残存リスクを受け入れられるのは次の多層防御による: mint できるのは tag:ci の auth key のみ / tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。完全分離は別 job かコンテナ隔離が要るが、dev サーバは session job と同じ runner の localhost で動かす必要があり（tailnet に出さないため）今回は採らない
+11. **caller のコードを実行する job と OIDC トークンを発行する job を分ける**: 同じ job の中では、環境変数の除去（`env -u ACTIONS_ID_TOKEN_REQUEST_*`）や GitHub の永続化ファイルのデコイは境界にならない。同一 VM・同一ユーザーで `sudo` NOPASSWD のため、caller のコード（依存パッケージの install script を含む）は別 step のプロセスの `/proc/<pid>/environ` を読む等で回避できる。そこで `session.yml` を次の 2 job に分ける
+    - `tailscale-auth-key` job: `id-token: write` を持つ唯一の job。caller リポジトリを checkout せず、caller のコードを一切実行しない。GitHub の OIDC トークンを Tailscale の token exchange（`/api/v2/oauth/token-exchange`）で API トークンに換え、tag:ci の auth key（single-use・ephemeral・preauthorized、有効期限 90 分）を発行する（`runner/mint-tailscale-auth-key.sh`）
+    - `session` job: `permissions` は `contents: read` だけで、`id-token` を持たない。caller のコード（`setup_command` / `start_command` / `setup_script`）はこの job で動く。tailnet への参加は、上の job が発行した auth key で行う（`runner/decrypt-tailscale-auth-key.sh` → `tailscale/github-action` の `authkey`）
+
+    auth key は job output で渡すが、平文では渡せない。add-mask した値は job output から落とされ、落とされない平文は受け取る側の step の `env:` / `with:` の表示として public な run のログに出るため。発行側が `TS_OIDC_CLIENT_ID` と run ID から作ったパスフレーズで暗号化（`openssl enc -aes-256-cbc -pbkdf2`）し、受け取る側が tailnet 参加の直前の step で復号して add-mask する。同名セッションの run が後から来た時に auth key の発行だけ先に済ませて待たせると失効しうるため、`concurrency` は session job ではなく workflow 単位に置く
+
+    **残存リスク**: session job の caller のコードは、tailnet 参加の前後に復号済みの auth key を読める（同一 VM は境界にならないため）。読めるのは single-use の tag:ci の auth key 1 本だけで、先に使われるとこの run の参加が失敗して表に出る。OIDC トークンを発行して auth key を何本でも作る能力は caller のコードには無い。残りは次の多層防御で受け入れる: tag:ci は ACL で発信全拒否 / ephemeral node で即削除 / credential は caller repo 単位にスコープ。同様に、`WEBTUNNEL_AUTH_ENV` の復号済みの値も、セットアップスクリプトの実行中は同じ VM の caller のコード（先に起動した dev サーバや、`setup_command` が仕込んだ root のプロセス等）から読める。`run-auth-setup.sh` がスクリプトの終了後に資格情報を環境に持つプロセスを止めるのは、読める期間をこの step の中に限るためで、境界ではない（「ログイン済み状態でのセッション開始」）
 12. **セッションに持ち込む認証情報を漏らさない**: base64 単一行の secret + `add-mask`、ログイン操作を録画開始前に済ませる順序、開発環境用アカウント限定の運用で担保する（「ログイン済み状態でのセッション開始」の「認証情報を Actions のログ・artifact に残さないための設計」）
 13. **tailnet の実 IP を run のログ・サマリに出さない**: public リポジトリの run のログ・ステップサマリは誰でも読める。到達には tailnet への参加が要るため IP 単体で侵入できるわけではないが、環境固有情報を公開しない原則をログにも適用する。接続先の IP はローカルの `webtunnel cdp <session>` が `tailscale status` から引くため、runner 側が出力する必要はない（`session.yml` のセッション情報出力と `bridge.sh` の両方が対象）
 14. **Chromium の起動フラグは caller から受けない**: 起動フラグを任意の文字列で受ける input を作ると、`--remote-debugging-address=0.0.0.0` で CDP を tailnet の外へ露出させる等、1 の「公開エンドポイントゼロ」を caller の input ひとつで崩せる。起動オプションは `software_webgl` のような真偽値 input にし、付くフラグは `start-chromium.sh` の固定リスト（`--use-gl=angle --use-angle=swiftshader --enable-unsafe-swiftshader`）だけにする（「ソフトウェア WebGL（SwiftShader）」）。11 の「クライアントから受けた本文を runner で実行する経路を作らない」と同じ判断
@@ -258,6 +264,8 @@ on:
         default: "false" # WebGL2 が要るページ（Godot の Web エクスポート等）を開く時だけ up --software-webgl で true にする
 jobs:
   session:
+    # reusable workflow の job が持てる権限はここで付与した分が上限になる。id-token: write を使うのは
+    # session.yml の auth key 発行 job だけで、caller のコードを実行する job には渡らない
     permissions:
       id-token: write
       contents: read
@@ -300,6 +308,9 @@ webtunnel/
 │   ├── session.yml                   # reusable workflow (workflow_call): Chromium セッションの実体
 │   └── browser-session.yml           # workflow_dispatch: webtunnel 自身用の薄いラッパー（session.yml を呼ぶ）
 ├── runner/                           # GHA 側スクリプト
+│   ├── mint-tailscale-auth-key.sh    # OIDC → Tailscale の auth key を発行して暗号化（caller のコードを実行しない job）
+│   ├── decrypt-tailscale-auth-key.sh # 発行 job から受けた auth key を tailnet 参加の直前に復号
+│   ├── test/test-run-auth-setup.sh   # 資格情報を環境に持つ常駐プロセスだけが止まることの検証（Linux のみ）
 │   ├── start-dev-server.sh           # caller repo の dev サーバ起動 + 応答待ち（ログは artifact）
 │   ├── start-chromium.sh             # Xvfb + headed Chromium 起動 + CDP 応答待ち
 │   ├── run-auth-setup.sh             # caller repo のセットアップスクリプト実行（ログイン済み状態を作る）
@@ -390,7 +401,7 @@ gh secret set TS_OIDC_AUDIENCE -R <owner>/<repo>
 
 既存の credential の subject がその repo をカバーしていれば（ワイルドカードの範囲内なら）発行は不要で、同じ Client ID / Audience をそのまま登録すればよい。
 
-形式が違う credential を流用してはいけない（例: immutable ID 形式の webtunnel 用 credential を、従来形式の repo にそのまま登録する）。Secrets の名前は揃っていても subject が一致しないため、run の「Tailscale に参加」step が `failed to exchange JWT for access token: token exchange failed with status 403` で失敗する（実例: https://github.com/bannzai/castle/issues/854 ）。その場合は「1. subject 接頭辞を確認する」に戻り、接頭辞に合う Subject の credential を別に発行する。同じ 403 は Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い（別の credential の値が混ざる）でも起きるため、接頭辞の確認とあわせて Client ID / Audience が発行した credential の組み合わせと一致しているかも確認する。
+形式が違う credential を流用してはいけない（例: immutable ID 形式の webtunnel 用 credential を、従来形式の repo にそのまま登録する）。Secrets の名前は揃っていても subject が一致しないため、run の「Tailscale の auth key を発行」step が `failed to exchange JWT for access token: token exchange failed with status 403` で失敗する（実例: https://github.com/bannzai/castle/issues/854 ）。その場合は「1. subject 接頭辞を確認する」に戻り、接頭辞に合う Subject の credential を別に発行する。同じ 403 は Secrets の `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の値の誤り・組み合わせ違い（別の credential の値が混ざる）でも起きるため、接頭辞の確認とあわせて Client ID / Audience が発行した credential の組み合わせと一致しているかも確認する。
 
 ### 3. caller workflow を追加する
 

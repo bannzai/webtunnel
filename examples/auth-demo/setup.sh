@@ -24,11 +24,17 @@ mkdir -p "$WORK"
 if ! curl -fs -m 2 -o /dev/null "${BASE_URL}/login"; then
   # セッション中はローカルの agent-browser から触るため、この step の後も生かしておく。
   # setsid でプロセスグループから切り離すのは、このスクリプトがハングして timeout に
-  # グループごと打ち切られてもサーバを道連れにしないため（setsid の無い環境では通常起動）
+  # グループごと打ち切られてもサーバを道連れにしないため（setsid の無い環境では通常起動）。
+  # 認証情報を環境変数から外して標準入力で渡すのは、環境に残すと run-auth-setup.sh がこのスクリプトの
+  # 終了後にサーバを止めるため（復号済みの資格情報を環境に持つ常駐プロセスを残さない。
+  # PROJECT.md「ログイン済み状態でのセッション開始」参照）
+  server_env=(env -u WEBTUNNEL_DEMO_USERNAME -u WEBTUNNEL_DEMO_PASSWORD WEBTUNNEL_DEMO_PORT="$PORT")
   if command -v setsid >/dev/null 2>&1; then
-    WEBTUNNEL_DEMO_PORT="$PORT" setsid python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 < /dev/null &
+    printf '%s\n%s\n' "$WEBTUNNEL_DEMO_USERNAME" "$WEBTUNNEL_DEMO_PASSWORD" |
+      "${server_env[@]}" setsid python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 &
   else
-    WEBTUNNEL_DEMO_PORT="$PORT" nohup python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 &
+    printf '%s\n%s\n' "$WEBTUNNEL_DEMO_USERNAME" "$WEBTUNNEL_DEMO_PASSWORD" |
+      "${server_env[@]}" nohup python3 "${HERE}/server.py" >"$WORK/auth-demo-server.log" 2>&1 &
   fi
   for _ in $(seq 1 20); do
     curl -fs -m 2 -o /dev/null "${BASE_URL}/login" && break

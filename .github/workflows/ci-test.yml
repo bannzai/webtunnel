@@ -21,7 +21,7 @@ jobs:
           persist-credentials: false
       - name: シェルの自動テストを実行する
         run: |
-          for test in local/test/test-*.sh skills/test/test-*.sh skills/webtunnel/scripts/test/test-*.sh; do
+          for test in local/test/test-*.sh runner/test/test-*.sh skills/test/test-*.sh skills/webtunnel/scripts/test/test-*.sh; do
             if [[ "$test" == */test-godot-web.sh ]]; then continue; fi
             bash "$test"
           done

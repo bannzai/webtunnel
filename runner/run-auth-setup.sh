@@ -105,6 +105,51 @@ load_auth_env() {
   if [ ${#names[@]} -gt 0 ]; then
     echo "認証情報を環境変数として渡す: ${names[*]}"
   fi
+  AUTH_ENV_NAMES=("${names[@]}")
+}
+
+# 復号した資格情報（AUTH_ENV_NAMES の変数）を環境に持ったまま残ったプロセスを SIGKILL で止める。
+# 対象は agent-browser の daemon や、セットアップスクリプトが setsid で切り離した常駐プロセス等で、
+# 止めないと復号済みの資格情報がセッション終了まで /proc/<pid>/environ から読める。
+# 判定は /proc/<pid>/environ に「KEY=VALUE」と完全に一致するエントリがあるか。root のプロセスも
+# 読めるよう sudo が使えれば sudo で走査する。SIGTERM にしないのは、CDP 接続中の agent-browser が
+# 終了処理で Chromium を閉じうるため。走査中に生まれた子を取りこぼさないよう、止める対象が
+# 無くなるまで走査を繰り返す（上限 5 回）。
+# 副作用: 呼び出し後、AUTH_ENV_NAMES の変数をこのシェルから unset する。
+stop_credential_holders() {
+  [ ${#AUTH_ENV_NAMES[@]} -gt 0 ] || return 0
+  [ -d /proc ] || return 0
+  local -a unset_args=() scanner=(python3)
+  local name stopped
+  for name in "${AUTH_ENV_NAMES[@]}"; do unset_args+=(-u "$name"); done
+  sudo -n true 2>/dev/null && scanner=(sudo -n python3)
+  # 値は argv に出さず stdin に NUL 区切りで渡す。走査プロセス自身は資格情報を env から外して起動する
+  stopped="$(for name in "${AUTH_ENV_NAMES[@]}"; do printf '%s=%s\0' "$name" "${!name}"; done |
+    env "${unset_args[@]}" "${scanner[@]}" -c '
+import os, signal, sys
+targets = {e for e in sys.stdin.buffer.read().split(b"\0") if e}
+me = os.getpid()
+for _ in range(5):
+    killed = False
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        if int(pid) == me:
+            continue
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                if targets.isdisjoint(f.read().split(b"\0")):
+                    continue
+            with open(f"/proc/{pid}/comm") as f:
+                comm = f.read().strip()
+            os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            continue
+        killed = True
+        print(f"{comm} (pid {pid})")
+    if not killed:
+        break
+')" || true
+  unset "${AUTH_ENV_NAMES[@]}"
+  [ -z "$stopped" ] || warn "認証情報を環境変数に持ったまま残ったプロセスを止めた: $(printf '%s' "$stopped" | paste -sd ',' -)。セッション中に残す常駐プロセスは、認証情報の環境変数を外して起動する（\`examples/auth-demo/setup.sh\` 参照）。"
 }
 
 if [ ! -f "$SETUP_SCRIPT" ]; then
@@ -132,6 +177,7 @@ if ! command -v agent-browser >/dev/null 2>&1; then
   fi
 fi
 
+AUTH_ENV_NAMES=()
 if [ -n "${WEBTUNNEL_AUTH_ENV:-}" ]; then
   load_auth_env
 fi
@@ -141,13 +187,11 @@ export WEBTUNNEL_CDP_URL="http://127.0.0.1:${CDP_PORT}"
 # （~/.claude/rules/agent-browser-session-naming.md と同じ方針）
 export AGENT_BROWSER_SESSION="${AGENT_BROWSER_SESSION:-webtunnel-runner}"
 
-# セットアップスクリプトに、この job が持つ OIDC トークン発行能力（id-token: write）と
-# GitHub の永続化ファイルを渡さない（start-dev-server.sh の caller コマンドと同じハードニング。
-# PROJECT.md「リポジトリ公開に耐える安全性」参照）
+# セットアップスクリプトに GitHub の永続化ファイルを渡さない（start-dev-server.sh の caller コマンドと同じ扱い。
+# セキュリティ境界ではない。PROJECT.md「リポジトリ公開に耐える安全性」の 11 参照）
 DECOY_DIR="${RUNNER_TEMP:-$(pwd)/tmp}/auth-setup-github-files"
 mkdir -p "$DECOY_DIR"
 caller_env=(env
-  -u ACTIONS_ID_TOKEN_REQUEST_URL -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
   GITHUB_ENV="$DECOY_DIR/env"
   GITHUB_PATH="$DECOY_DIR/path"
   GITHUB_OUTPUT="$DECOY_DIR/output"
@@ -157,12 +201,13 @@ caller_env=(env
 # 録画・tailnet 参加・keepalive まで飛ばされ、「失敗してもセッションは開く」が成立しなくなる。
 # 打ち切りはプロセスグループごと行う。ハングした子（復号済みの資格情報を環境に持ち、
 # 後から CDP 操作を再開しうる）を残さないため。スクリプトが起動する常駐プロセス
-# （dev サーバ等）は、スクリプト側で setsid によりグループから切り離して生かす
-# （examples/auth-demo/setup.sh 参照）
+# （dev サーバ等）は、スクリプト側で setsid によりグループから切り離し、認証情報の環境変数を
+# 外して起動する（外さなければ直後の stop_credential_holders が止める。examples/auth-demo/setup.sh 参照）
 set +e
 run_with_timeout "$SETUP_TIMEOUT_SECONDS" "${caller_env[@]}" bash "$SETUP_SCRIPT"
 SETUP_STATUS=$?
 set -e
+stop_credential_holders
 
 if [ "$SETUP_STATUS" -eq 0 ]; then
   echo "セットアップ成功: ${SETUP_SCRIPT}"
