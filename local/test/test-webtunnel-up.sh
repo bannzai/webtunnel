@@ -93,6 +93,17 @@ case "$out" in
   *) assert "自分の run のノードがあれば dispatch しない" "found" "missing: ${out}" ;;
 esac
 
+# run は起動中だがノードがまだ tailnet に参加していなければ、準備中として dispatch しない
+rm -f "$TMP/dispatch.log.runlist" "$TMP/ts-count"
+printf 'workflow\nrun\n' > "$TMP/dispatch.log"
+out=$(TS_STUB_COUNT_FILE="$TMP/ts-count" TS_STUB_READY_AFTER=99 GH_STUB_LOG="$TMP/dispatch.log" PATH="$TMP:$PATH" bash "$CLI" up dev 2>&1)
+code=$?
+assert "run が準備中なら up は exit 0" "0" "$code"
+case "$out" in
+  *"run はすでに起動中"*) assert "run が準備中なら dispatch せず準備中と出力する" "found" "found" ;;
+  *) assert "run が準備中なら dispatch せず準備中と出力する" "found" "missing: ${out}" ;;
+esac
+
 # run 一覧を取得できない時は、稼働中のセッションに重ねて dispatch しないよう中断する
 cat > "$TMP/gh-fail" <<'EOF'
 #!/usr/bin/env bash
@@ -180,6 +191,12 @@ case "$out" in
   *"run が存在しない"*) assert "GitHub API の失敗を run 不在として誤報しない" "not-found" "found" ;;
   *) assert "GitHub API の失敗を run 不在として誤報しない" "not-found" "not-found" ;;
 esac
+
+# run が起動した後もノードが tailnet に参加するまでは待ち、参加したら ready で終わる
+out=$(run_up_wait env TS_STUB_READY_AFTER=3)
+code=$?
+assert "ノードの参加前は待ち、参加後に ready で exit 0" "0" "$code"
+assert "ノードの参加まで tailnet を繰り返し確認する" "1" "$( [ "$(cat "$TMP/ts-count")" -ge 4 ] && echo 1 || echo 0 )"
 
 # run 一覧が空（取得は成功）なら run 不在として終了する
 out=$(run_up_wait env GH_STUB_NO_RUN=1)

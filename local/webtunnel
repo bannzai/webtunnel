@@ -147,7 +147,7 @@ cmd_wait() {
   local minutes="${WEBTUNNEL_WAIT_MINUTES:-40}"
   local interval="${WEBTUNNEL_WAIT_INTERVAL:-10}"
   local grace="${WEBTUNNEL_WAIT_GRACE:-30}"
-  echo "webtunnel-${session} の準備完了を待機中...（最大 ${minutes} 分）"
+  echo "セッション ${session} の準備完了を待機中...（最大 ${minutes} 分）"
   local now
   now=$(date +%s)
   local end=$(( now + minutes * 60 ))
@@ -156,7 +156,7 @@ cmd_wait() {
     local ip
     ip=$(session_ip "$session")
     if [ -n "$ip" ] && curl -s -m 5 "http://${ip}:${CDP_PORT}/json/version" >/dev/null 2>&1; then
-      echo "ready: http://${ip}:${CDP_PORT} (webtunnel-${session})"
+      echo "ready: http://${ip}:${CDP_PORT} (セッション ${session})"
       return 0
     fi
     # 猶予は経過時間で判定する (確認回数で数えると WEBTUNNEL_WAIT_INTERVAL を短くした時に猶予も縮む)
@@ -208,7 +208,7 @@ cmd_status() {
   local ip
   ip=$(session_ip "$session")
   if [ -z "$ip" ]; then
-    echo "webtunnel-${session} は tailnet に存在しない（未起動 or 準備中）" >&2
+    echo "セッション ${session} は tailnet に存在しない（未起動 or 準備中）" >&2
     return 1
   fi
   curl -s -m 10 -w "\nHTTP %{http_code} / %{time_total}s\n" "http://${ip}:${CDP_PORT}/json/version"
@@ -218,7 +218,7 @@ cmd_cdp() {
   local session=$1
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
   echo "CDP: http://${ip}:${CDP_PORT}"
   echo ""
   echo "agent-browser の接続例（--session は作業スペース名にする。~/.claude/rules/agent-browser-session-naming.md 参照）:"
@@ -231,7 +231,7 @@ cmd_preview() {
   local session=$1
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
   local url="http://${ip}:${PREVIEW_PORT}/"
   curl -fsS -m 10 -o /dev/null "$url" || {
     echo "preview が応答しない（up --no-preview で起動していないか確認する）: ${url}" >&2
@@ -248,7 +248,7 @@ cmd_screenshot() {
   command -v agent-browser >/dev/null 2>&1 || { echo "agent-browser が必要" >&2; return 1; }
   local ip
   ip=$(session_ip "$session")
-  [ -n "$ip" ] || { echo "webtunnel-${session} は tailnet に存在しない" >&2; return 1; }
+  [ -n "$ip" ] || { echo "セッション ${session} は tailnet に存在しない" >&2; return 1; }
 
   mkdir -p "$(dirname "$out")"
   # agent-browser のセッション名は作業スペース名 + tunnel セッション名で固有にする

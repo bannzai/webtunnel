@@ -50,12 +50,20 @@ peers() {
   printf '{"Peer":{%s}}' "$*"
 }
 
-# cdp を実行し、接続先の IP を返す（解決できなければ none）
+# cdp を実行し、接続先の IP を返す。ノードが見つからず「tailnet に存在しない」で終わった時は none、
+# それ以外の理由で失敗した時（jq の欠如・式の誤り等）は error を返し、否定のテストが別の原因で PASS しないようにする
 resolved_ip() {
   local json=$1; shift
-  local out
-  out=$(TS_STUB_JSON="$json" PATH="$TMP:$PATH" "$@" bash "$CLI" cdp dev 2>/dev/null) || { echo none; return; }
-  printf '%s\n' "$out" | sed -n 's|^CDP: http://\([^:]*\):9222$|\1|p'
+  local out err
+  if out=$(TS_STUB_JSON="$json" PATH="$TMP:$PATH" "$@" bash "$CLI" cdp dev 2>"$TMP/stderr"); then
+    printf '%s\n' "$out" | sed -n 's|^CDP: http://\([^:]*\):9222$|\1|p'
+    return
+  fi
+  err=$(cat "$TMP/stderr")
+  case "$err" in
+    "セッション dev は tailnet に存在しない") echo none ;;
+    *) echo "error: ${err}" ;;
+  esac
 }
 
 ours=$(peer webtunnel-dev-123 100.64.0.1 '["tag:ci"]')
