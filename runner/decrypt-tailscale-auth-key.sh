@@ -7,6 +7,8 @@ set -euo pipefail
 
 : "${SESSION_PRIVATE_KEY_FILE:?SESSION_PRIVATE_KEY_FILE が未設定}"
 : "${ENCRYPTED_AUTH_KEY_FILE:?ENCRYPTED_AUTH_KEY_FILE が未設定}"
+# 失敗した時も秘密鍵と暗号文を残さない（job の残りの間、先に起動した caller のプロセスから読めるため）
+trap 'rm -f "$SESSION_PRIVATE_KEY_FILE" "$ENCRYPTED_AUTH_KEY_FILE"' EXIT
 [ -s "$ENCRYPTED_AUTH_KEY_FILE" ] || {
   echo "::error::暗号化した auth key を受け取れなかった（tailscale-auth-key job の失敗か、待ちの打ち切り）。re-run ではなく workflow_dispatch で新しい run を起動する（local/webtunnel up）" >&2
   exit 1
@@ -14,7 +16,6 @@ set -euo pipefail
 
 auth_key="$(openssl pkeyutl -decrypt -inkey "$SESSION_PRIVATE_KEY_FILE" \
   -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -in "$ENCRYPTED_AUTH_KEY_FILE")"
-rm -f "$SESSION_PRIVATE_KEY_FILE" "$ENCRYPTED_AUTH_KEY_FILE"
 [ -n "$auth_key" ] || {
   echo "auth key を復号できなかった" >&2
   exit 1

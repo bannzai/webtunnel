@@ -26,6 +26,10 @@ AUTH_KEY_EXPIRY_SECONDS="${AUTH_KEY_EXPIRY_SECONDS:-5400}"
 # エラー時に応答本文を出さない（-f）。応答にトークンが含まれうるため
 id_token="$(curl -fsS -G -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
   --data-urlencode "audience=${TS_OIDC_AUDIENCE}" "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r '.value')"
+[ -n "$id_token" ] && [ "$id_token" != "null" ] || {
+  echo "GitHub の OIDC トークンを取得できなかった" >&2
+  exit 1
+}
 echo "::add-mask::${id_token}"
 
 # 失敗の文言は tailscale up（--client-id / --id-token）と同じ形にする。credential の Subject 違い等の

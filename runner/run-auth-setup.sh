@@ -118,6 +118,7 @@ load_auth_env() {
 # 対象はセットアップスクリプトの子孫（環境に「WEBTUNNEL_AUTH_SETUP_MARKER=<SETUP_MARKER>」を継承したもの）に
 # 限る。WEBTUNNEL_AUTH_ENV に USER=runner のような runner の既存の環境と同じ KEY=VALUE があると、
 # Chromium・このシェルや、既存の dev サーバがセットアップ中に生んだ子も一致してしまうため。
+# 走査に失敗した時は、止められたか確かめられないため set -e でこのスクリプトごと失敗させる。
 # 副作用: 呼び出し後、AUTH_ENV_NAMES の変数をこのシェルから unset する。
 stop_credential_holders() {
   [ ${#AUTH_ENV_NAMES[@]} -gt 0 ] || return 0
@@ -152,7 +153,7 @@ for _ in range(5):
         print(f"{comm} (pid {pid})")
     if not killed:
         break
-' "$SETUP_MARKER")" || true
+' "$SETUP_MARKER")"
   unset "${AUTH_ENV_NAMES[@]}"
   [ -z "$stopped" ] || warn "認証情報を環境変数に持ったまま残ったプロセスを止めた: $(printf '%s' "$stopped" | paste -sd ',' -)。セッション中に残す常駐プロセスは、認証情報の環境変数を外して起動する（\`examples/auth-demo/setup.sh\` 参照）。"
 }

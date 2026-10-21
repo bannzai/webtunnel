@@ -25,9 +25,9 @@ if ! curl -fs -m 2 -o /dev/null "${BASE_URL}/login"; then
   # セッション中はローカルの agent-browser から触るため、この step の後も生かしておく。
   # setsid でプロセスグループから切り離すのは、このスクリプトがハングして timeout に
   # グループごと打ち切られてもサーバを道連れにしないため（setsid の無い環境では通常起動）。
-  # 環境変数を PATH 以外すべて外し、資格情報は標準入力、ポートは引数で渡す。secret WEBTUNNEL_AUTH_ENV の
-  # 変数（ポート等の設定を含む）がどれか 1 つでも環境に残ると、run-auth-setup.sh がこのスクリプトの
-  # 終了後にサーバを止めるため（復号済みの資格情報を環境に持つ常駐プロセスを残さない。
+  # 環境変数を PATH 以外すべて外すのは、run-auth-setup.sh がこのスクリプトの終了後に、セットアップの印
+  # （WEBTUNNEL_AUTH_SETUP_MARKER）と secret WEBTUNNEL_AUTH_ENV の KEY=VALUE のどれか（ポート等の設定を含む）を
+  # 環境に持つプロセスを止めるため（復号済みの資格情報を環境に持つ常駐プロセスを残さない。
   # PROJECT.md「ログイン済み状態でのセッション開始」参照）
   server_env=(env -i PATH="$PATH")
   if command -v setsid >/dev/null 2>&1; then
