@@ -76,10 +76,15 @@ run_setup() {
 
 # 他のテストの実行と値が衝突しないよう、実行ごとの乱数を値に入れる
 SECRET_VALUE="webtunnel-test-${RANDOM}${RANDOM}"
+# セットアップの前からある、同じ KEY=VALUE を環境に持つプロセス（runner の既存の環境と一致する値の代わり）
+WEBTUNNEL_TEST_SECRET="$SECRET_VALUE" sleep 300 &
+PRE_EXISTING_PID=$!
 run_setup "$(printf 'WEBTUNNEL_TEST_SECRET=%s\n' "$SECRET_VALUE" | base64 | tr -d '\n')"
 assert "資格情報ありで run-auth-setup.sh が成功する" 0 $?
 assert "資格情報を環境に持つ常駐プロセスは止まる" dead "$(liveness_after_kill "$(cat "$TMP/holder.pid")")"
 assert "資格情報を外した常駐プロセスは残る" alive "$(liveness "$(cat "$TMP/clean.pid")")"
+assert "セットアップの前からあるプロセスは同じ KEY=VALUE を持っていても止めない" alive "$(liveness "$PRE_EXISTING_PID")"
+kill -9 "$PRE_EXISTING_PID" 2>/dev/null
 assert "止めたことを summary に警告する" 1 "$(grep -c '残ったプロセスを止めた' "$TMP/summary.md")"
 assert "資格情報の値を出力しない" 0 "$(cat "$TMP/out.log" "$TMP/summary.md" | grep -c "$SECRET_VALUE")"
 kill -9 "$(cat "$TMP/clean.pid")" 2>/dev/null

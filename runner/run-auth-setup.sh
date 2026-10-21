@@ -108,6 +108,26 @@ load_auth_env() {
   AUTH_ENV_NAMES=("${names[@]}")
 }
 
+# プロセスを「pid 起動時刻」で識別する Python の関数。pid は再利用されるため起動時刻（/proc/<pid>/stat の 22 番目）と組にする
+PROCESS_KEY_PY='
+import os
+def process_key(pid):
+    with open(f"/proc/{pid}/stat") as f:
+        return f"{pid} {f.read().rsplit(chr(41), 1)[1].split()[19]}"
+'
+
+# 現在あるプロセスを PRE_SETUP_PROCESSES のファイルに 1 行ずつ記録する（stop_credential_holders が除外に使う）
+snapshot_processes() {
+  [ -d /proc ] || return 0
+  python3 -c "$PROCESS_KEY_PY"'
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        print(process_key(pid))
+    except OSError:
+        pass
+' > "$PRE_SETUP_PROCESSES"
+}
+
 # 復号した資格情報（AUTH_ENV_NAMES の変数）を環境に持ったまま残ったプロセスを SIGKILL で止める。
 # 対象は agent-browser の daemon や、セットアップスクリプトが setsid で切り離した常駐プロセス等で、
 # 止めないと復号済みの資格情報がセッション終了まで /proc/<pid>/environ から読める。
@@ -115,6 +135,9 @@ load_auth_env() {
 # 読めるよう sudo が使えれば sudo で走査する。SIGTERM にしないのは、CDP 接続中の agent-browser が
 # 終了処理で Chromium を閉じうるため。走査中に生まれた子を取りこぼさないよう、止める対象が
 # 無くなるまで走査を繰り返す（上限 5 回）。
+# セットアップスクリプトの実行前からあるプロセス（snapshot_processes の記録。Chromium・このシェル等）は
+# 止めない。WEBTUNNEL_AUTH_ENV に USER=runner のような runner の既存の環境と同じ KEY=VALUE が
+# あると、それらも一致してしまうため。
 # 副作用: 呼び出し後、AUTH_ENV_NAMES の変数をこのシェルから unset する。
 stop_credential_holders() {
   [ ${#AUTH_ENV_NAMES[@]} -gt 0 ] || return 0
@@ -126,8 +149,11 @@ stop_credential_holders() {
   # 値は argv に出さず stdin に NUL 区切りで渡す。走査プロセス自身は資格情報を env から外して起動する
   stopped="$(for name in "${AUTH_ENV_NAMES[@]}"; do printf '%s=%s\0' "$name" "${!name}"; done |
     env "${unset_args[@]}" "${scanner[@]}" -c '
-import os, signal, sys
+'"$PROCESS_KEY_PY"'
+import signal, sys
 targets = {e for e in sys.stdin.buffer.read().split(b"\0") if e}
+with open(sys.argv[1]) as f:
+    pre_existing = set(f.read().splitlines())
 me = os.getpid()
 for _ in range(5):
     killed = False
@@ -135,6 +161,8 @@ for _ in range(5):
         if int(pid) == me:
             continue
         try:
+            if process_key(pid) in pre_existing:
+                continue
             with open(f"/proc/{pid}/environ", "rb") as f:
                 if targets.isdisjoint(f.read().split(b"\0")):
                     continue
@@ -147,7 +175,7 @@ for _ in range(5):
         print(f"{comm} (pid {pid})")
     if not killed:
         break
-')" || true
+' "$PRE_SETUP_PROCESSES")" || true
   unset "${AUTH_ENV_NAMES[@]}"
   [ -z "$stopped" ] || warn "認証情報を環境変数に持ったまま残ったプロセスを止めた: $(printf '%s' "$stopped" | paste -sd ',' -)。セッション中に残す常駐プロセスは、認証情報の環境変数を外して起動する（\`examples/auth-demo/setup.sh\` 参照）。"
 }
@@ -203,6 +231,8 @@ caller_env=(env
 # 後から CDP 操作を再開しうる）を残さないため。スクリプトが起動する常駐プロセス
 # （dev サーバ等）は、スクリプト側で setsid によりグループから切り離し、認証情報の環境変数を
 # 外して起動する（外さなければ直後の stop_credential_holders が止める。examples/auth-demo/setup.sh 参照）
+PRE_SETUP_PROCESSES="${RUNNER_TEMP:-$(pwd)/tmp}/pre-setup-processes"
+snapshot_processes
 set +e
 run_with_timeout "$SETUP_TIMEOUT_SECONDS" "${caller_env[@]}" bash "$SETUP_SCRIPT"
 SETUP_STATUS=$?

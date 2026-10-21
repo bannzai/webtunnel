@@ -8,12 +8,13 @@ webtunnel の「ログイン済み状態でセッションを開始する」経�
 run-auth-setup.sh がセットアップ後に止めるため。
 """
 import http.server
-import os
 import secrets
 import sys
 import urllib.parse
 
-PORT = int(os.environ.get("WEBTUNNEL_DEMO_PORT", "8123"))
+# ポートは引数で受け取る（環境変数で受け取らない理由はモジュールの docstring と同じ）。
+# 既定の 8123 は setup.sh の既定ポートに合わせる
+PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8123
 USERNAME = sys.stdin.readline().rstrip("\n")
 PASSWORD = sys.stdin.readline().rstrip("\n")
 COOKIE_NAME = "webtunnel_demo_session"

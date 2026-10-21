@@ -112,6 +112,9 @@ jobs:
       id-token: write
     outputs:
       encrypted_auth_key: ${{ steps.mint.outputs.encrypted_auth_key }}
+      # session job だけを再実行すると、この job は再実行されず前回の（使用済みか失効した）auth key が渡る。
+      # decrypt-tailscale-auth-key.sh がこの値と現在の試行番号を比べて検出する
+      minted_run_attempt: ${{ github.run_attempt }}
     steps:
       # caller リポジトリは checkout しない。runner スクリプトは session job と同じく
       # この workflow ファイルと同一 repo・同一 commit から取得する
@@ -257,6 +260,7 @@ jobs:
         id: tailscale-auth-key
         env:
           ENCRYPTED_AUTH_KEY: ${{ needs.tailscale-auth-key.outputs.encrypted_auth_key }}
+          MINTED_RUN_ATTEMPT: ${{ needs.tailscale-auth-key.outputs.minted_run_attempt }}
           TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
         run: ./.webtunnel-runner/runner/decrypt-tailscale-auth-key.sh
 
