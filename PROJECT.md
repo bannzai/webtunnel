@@ -30,7 +30,7 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
                                          └───────────────────────────────────┘
 ```
 
-- runner は ephemeral node として tailnet に参加し、ホスト名は `webtunnel-<session>` になる
+- runner は ephemeral node（`tag:ci`）として tailnet に参加し、ホスト名は `webtunnel-<session>-<run id>` になる
 - CDP はローカルの 127.0.0.1:9222 で待ち受け、socat で tailscale インターフェースへ中継する
 - dev サーバは runner の localhost だけで動かし、tailnet には出さない（見るのは同じ runner 上の Chromium のため）
 - preview（ライブ映像）は 127.0.0.1:9100 で待ち受け、CDP と同じく socat で中継する
@@ -44,10 +44,19 @@ GitHub Actions の Linux Runner 上で Chromium を起動し、Tailscale 経由�
 
 ### CDP の Host ヘッダ制約
 
-Chromium の DevTools HTTP エンドポイント（`/json/version` 等）は、Host ヘッダが IP アドレスか localhost 以外のリクエストを `Host header is specified and is not an IP address or localhost` で拒否する。MagicDNS 名（`http://webtunnel-<session>:9222`）では接続できないため、**接続は必ず tailscale IP で行う**。
+Chromium の DevTools HTTP エンドポイント（`/json/version` 等）は、Host ヘッダが IP アドレスか localhost 以外のリクエストを `Host header is specified and is not an IP address or localhost` で拒否する。MagicDNS 名（`http://webtunnel-<session>-<run id>:9222`）では接続できないため、**接続は必ず tailscale IP で行う**。
 
-- `local/webtunnel` CLI は `tailscale status` からセッションの IP を引いて接続する
+- `local/webtunnel` CLI は `tailscale status --json` からセッションの IP を引いて接続する（どのノードを採用するかは次の「接続先ノードの検証」）
 - `/json/version` が返す `webSocketDebuggerUrl` は Host ヘッダをそのまま echo するため、IP で GET すれば後続の WebSocket 接続も同じ IP（= socat bridge 経由）になり、一貫して疎通する
+
+### 接続先ノードの検証
+
+ホスト名は tailnet のどのノードでも自由に名乗れる値で、身元の確認には使えない。名前の一致だけで接続先を決めると、同じ tailnet の別ノードが `webtunnel-<session>` を名乗った時に、CLI がそのノードへ CDP 操作（ログイン済みの Cookie を含む）を送ってしまう。そこで `local/webtunnel` は次の両方を満たすノードだけを接続先にする（`session_ip`。`up` の冪等判定・`status`・`cdp`・`preview`・`screenshot` と、`webtunnel-cli.sh cdp` を通す skill の `godot-web.sh` / `godot-web-doctor.sh` が共通で使う）。
+
+- `tailscale status --json` の `Tags` に `tag:ci` がある。`tag:ci` は trust credential（OIDC）で参加したノードにしか付かない
+- ホスト名が `webtunnel-<session>-<run id>` で、run id が対象 repo・workflow で起動中（in_progress / queued）の、そのセッションの run の id に一致する。runner はホスト名に `github.run_id`（reusable workflow では caller の run の id）を入れて参加する
+
+run id は public repo では誰でも読めるため、run id の照合が防ぐのは `tag:ci` を持つ別ノード（同じ credential で起動した他の run）との取り違えで、tailnet 外から参加したノードの成りすましを防ぐのは `tag:ci` の確認になる。run 一覧を取得できない時は名前だけで採用せず「未参加」として扱い、`up` は重複起動を避けるため dispatch せずに失敗する。ホスト名は DNS ラベルの上限 63 文字に収める必要があるため、`session.yml` は超える session 名を入力検証で落とす
 
 ### 録画: Xvfb + headed Chromium + ffmpeg (x11grab)
 
@@ -457,7 +466,7 @@ Godot の既定の HTML シェルでは、起動に成功すると `#status` 要
 1. webtunnel up <session>
      └─ gh workflow run browser-session.yml -f session=<session>
 2. Runner: dev サーバ起動 → Xvfb + Chromium 起動（dev サーバの URL を開く）→ セットアップ（ログイン）→ 録画開始 → preview 起動
-     → tailscale join (hostname=webtunnel-<session>) → socat bridge
+     → tailscale join (hostname=webtunnel-<session>-<run id>, tag:ci) → socat bridge
 3. Local: webtunnel status <session>（= http://<tailscale IP>:9222/json/version）が 200 になったら ready
 4. agent-browser --cdp http://<tailscale IP>:9222 で操作。webtunnel preview <session> で画面を見る
 5. webtunnel down <session>
@@ -565,7 +574,7 @@ Godot の既定の HTML シェルでは、起動に成功すると `#status` 要
 
 ## 未検証事項・リスク
 
-- concurrency group は caller リポジトリ単位のため、repo を跨いだ同名セッション（tailnet ホスト名の衝突）は防げない。セッション名にリポジトリ由来の接頭辞を使う運用で回避する
+- concurrency group は caller リポジトリ単位のため、repo を跨いだ同名セッションの同時起動は防げない。ホスト名に run id が入り、CLI は対象 repo の run id で照合するため、接続先は取り違えない（「接続先ノードの検証」参照）
 - `cancel-in-progress: false` のため、同名セッションを down せずに再起動すると新しい run は前の run の終了までキューで待つ。作り直す時は先に `webtunnel down` する
 - ubuntu-latest のイメージ更新で Chromium のバイナリ名やプリインストール状況が変わる可能性がある。start-chromium.sh は google-chrome → google-chrome-stable → chromium-browser の順でフォールバックする
 - preview の実測は direct 接続のセッションでしか取れていない。DERP relay 経由に落ちた時に既定値（54 KB/s）が成立するかは未検証。映像が明らかに遅れる時は `tailscale status` で relay かどうかを確認し、preview ページで fps / 解像度を下げる
