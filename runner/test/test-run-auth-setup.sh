@@ -86,7 +86,8 @@ assert "資格情報を外した常駐プロセスは残る" alive "$(liveness "
 assert "セットアップの前からあるプロセスは同じ KEY=VALUE を持っていても止めない" alive "$(liveness "$PRE_EXISTING_PID")"
 kill -9 "$PRE_EXISTING_PID" 2>/dev/null
 assert "止めたことを summary に警告する" 1 "$(grep -c '残ったプロセスを止めた' "$TMP/summary.md")"
-assert "資格情報の値を出力しない" 0 "$(cat "$TMP/out.log" "$TMP/summary.md" | grep -c "$SECRET_VALUE")"
+# ::add-mask:: の行は runner が値を伏字にするための登録で、ログには表示されないため除く
+assert "資格情報の値を出力しない" 0 "$(cat "$TMP/out.log" "$TMP/summary.md" | grep -v '^::add-mask::' | grep -c "$SECRET_VALUE")"
 kill -9 "$(cat "$TMP/clean.pid")" 2>/dev/null
 
 run_setup ""
