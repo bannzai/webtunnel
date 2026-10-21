@@ -105,16 +105,15 @@ jobs:
   # OIDC トークンを発行できるのはこの job だけにし、caller のコード（setup_command / start_command /
   # setup_script）を一切実行しない。caller のコードが動く session job には id-token を渡さない
   # （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
+  # session job とは並行に動き、session job が artifact で出す run ごとの公開鍵を待って、
+  # それで暗号化した auth key を artifact で返す。job output・cache は使わない
+  # （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
   tailscale-auth-key:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # 公開鍵の待ち（最長 10 分）と発行の分
+    timeout-minutes: 20
     permissions:
       id-token: write
-    outputs:
-      auth_key_sha256: ${{ steps.mint.outputs.auth_key_sha256 }}
-      # session job だけを再実行すると、この job は再実行されず前回の（使用済みか失効した）auth key しか無い。
-      # session job がこの値と現在の試行番号を比べて検出する
-      minted_run_attempt: ${{ github.run_attempt }}
     steps:
       # caller リポジトリは checkout しない。runner スクリプトは session job と同じく
       # この workflow ファイルと同一 repo・同一 commit から取得する
@@ -125,25 +124,80 @@ jobs:
           ref: ${{ job.workflow_sha }}
           persist-credentials: false
 
+      # artifact の到着を待つ API は actions: read の権限が要り、caller workflow の permissions の変更が要るため使わない。
+      # 取得を試す step を間隔を置いて繰り返し、取得できた後の step は飛ばす。
+      # 待ちは最長 30 秒 × 20 回 = 10 分（session job の runner の割り当てが遅れる分を覆う）
+      - &download-session-public-key
+        name: session job の公開鍵を受け取る
+        if: hashFiles('webtunnel-handoff/session-public-key.pem') == ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: webtunnel-session-public-key-${{ github.run_attempt }}
+          path: webtunnel-handoff
+      - &wait-session-public-key
+        name: session job の公開鍵を待つ
+        if: hashFiles('webtunnel-handoff/session-public-key.pem') == ''
+        run: sleep 30
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+      - *wait-session-public-key
+      - *download-session-public-key
+
       - name: Tailscale の auth key を発行
-        id: mint
         env:
           TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
           TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
-          AUTH_KEY_FILE: ${{ runner.temp }}/webtunnel-tailscale-auth-key
+          SESSION_PUBLIC_KEY_FILE: webtunnel-handoff/session-public-key.pem
+          ENCRYPTED_AUTH_KEY_FILE: webtunnel-handoff/out/encrypted-auth-key.bin
         run: ./runner/mint-tailscale-auth-key.sh
 
-      # auth key を session job へ渡す。job output は public な run のログに出るため使わない。
-      # cache は UI・REST API から中身を取得できず、取得できるのは caller repo の workflow の run だけ
-      # （参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
-      - name: auth key を session job へ渡す
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # 暗号文は session job の秘密鍵でしか復号できないため、public な artifact に置いてよい
+      - name: 暗号化した auth key を session job へ渡す
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          path: ${{ runner.temp }}/webtunnel-tailscale-auth-key
-          key: webtunnel-tailscale-auth-key-${{ github.run_id }}-${{ github.run_attempt }}
+          name: webtunnel-encrypted-auth-key-${{ github.run_attempt }}
+          path: webtunnel-handoff/out/encrypted-auth-key.bin
+          # session job が受け取った後は使わない。最短の 1 日にする
+          retention-days: 1
+          if-no-files-found: error
 
   session:
-    needs: tailscale-auth-key
     runs-on: ubuntu-latest
     # 各 step が個別に時間制限を持つため、これは暴走時の最終防衛線
     timeout-minutes: 360
@@ -216,6 +270,23 @@ jobs:
           path: .webtunnel-runner
           persist-credentials: false
 
+      # tailscale-auth-key job から auth key を受け取るための run ごとの鍵ペア。caller のコードを実行する
+      # step（Node のセットアップ以降）より前に作る（参照: PROJECT.md「リポジトリ公開に耐える安全性」の 11）
+      - name: auth key を受け取る鍵ペアを作る
+        env:
+          SESSION_PRIVATE_KEY_FILE: ${{ runner.temp }}/webtunnel-session-private-key.pem
+          SESSION_PUBLIC_KEY_FILE: .webtunnel-runner/handoff/session-public-key.pem
+        run: ./.webtunnel-runner/runner/create-session-key-pair.sh
+
+      - name: 公開鍵を tailscale-auth-key job へ渡す
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: webtunnel-session-public-key-${{ github.run_attempt }}
+          path: .webtunnel-runner/handoff/session-public-key.pem
+          # tailscale-auth-key job が受け取った後は使わない。最短の 1 日にする
+          retention-days: 1
+          if-no-files-found: error
+
       # reusable workflow の呼び出しは job 単位で caller が step を差し込めないため、
       # dev サーバのツールチェーン準備はこの workflow 側で受け持つ（参照: PROJECT.md「dev サーバの起動」）
       - name: Node をセットアップ
@@ -266,29 +337,47 @@ jobs:
         timeout-minutes: 5
         run: ./.webtunnel-runner/runner/start-preview.sh
 
-      # auth key は single-use で有効期限も短いため、前の試行で発行したものは使えない
-      - name: auth key を発行した試行を確認
-        env:
-          MINTED_RUN_ATTEMPT: ${{ needs.tailscale-auth-key.outputs.minted_run_attempt }}
-        run: |
-          if [ "$MINTED_RUN_ATTEMPT" != "$GITHUB_RUN_ATTEMPT" ]; then
-            echo "::error::auth key は試行 ${MINTED_RUN_ATTEMPT} で発行したもので、現在の試行 ${GITHUB_RUN_ATTEMPT} では使えない（使用済みか失効済み）。session job だけでなく「Re-run all jobs」（gh run rerun <run ID>、--failed なし）で再実行する"
-            exit 1
-          fi
-
-      - name: auth key を受け取る
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      # tailscale-auth-key job の待ちと同じ方式で受け取る。ここに来るのは通常、公開鍵を渡してから数分後で
+      # 暗号文は届いている。届いていない時の待ちは最長 15 秒 × 10 回 = 2.5 分。
+      # artifact 名に試行番号を含めるため、session job だけを再実行した試行では届かず、復号の step が再実行の仕方を案内して止まる
+      - &download-encrypted-auth-key
+        name: 暗号化した auth key を受け取る
+        if: hashFiles('.webtunnel-runner/handoff/encrypted-auth-key.bin') == ''
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: ${{ runner.temp }}/webtunnel-tailscale-auth-key
-          key: webtunnel-tailscale-auth-key-${{ github.run_id }}-${{ github.run_attempt }}
-          fail-on-cache-miss: true
+          name: webtunnel-encrypted-auth-key-${{ github.run_attempt }}
+          path: .webtunnel-runner/handoff
+      - &wait-encrypted-auth-key
+        name: 暗号化した auth key を待つ
+        if: hashFiles('.webtunnel-runner/handoff/encrypted-auth-key.bin') == ''
+        run: sleep 15
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
+      - *wait-encrypted-auth-key
+      - *download-encrypted-auth-key
 
-      - name: auth key を読む
+      - name: auth key を復号
         id: tailscale-auth-key
         env:
-          AUTH_KEY_FILE: ${{ runner.temp }}/webtunnel-tailscale-auth-key
-          AUTH_KEY_SHA256: ${{ needs.tailscale-auth-key.outputs.auth_key_sha256 }}
-        run: ./.webtunnel-runner/runner/read-tailscale-auth-key.sh
+          SESSION_PRIVATE_KEY_FILE: ${{ runner.temp }}/webtunnel-session-private-key.pem
+          ENCRYPTED_AUTH_KEY_FILE: .webtunnel-runner/handoff/encrypted-auth-key.bin
+        run: ./.webtunnel-runner/runner/decrypt-tailscale-auth-key.sh
 
       # ここまで（CDP がローカルで応答するまで）tailnet に参加しない。
       # 参照: PROJECT.md「リポジトリ公開に耐える安全性」
