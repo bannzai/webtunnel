@@ -31,10 +31,11 @@ while [ "$(date +%s)" -lt "$END" ]; do
     echo "CDP :${PORT} 無応答 (${FAILS}/${MAX_FAILS}) $(date '+%H:%M:%S')" >&2
     if [ "$FAILS" -ge "$MAX_FAILS" ]; then
       echo "CDP が応答しなくなったためセッションを終了する" >&2
-      # 原因調査用に Chromium のログ末尾を残す（start-chromium.sh と同じログパス）
+      # 原因調査用に Chromium のログ末尾を残す（start-chromium.sh と同じログパス）。
+      # CDP の WebSocket URL を含む行は出さない（PROJECT.md「リポジトリ公開に耐える安全性」の 15）
       if [ -f "${WORK}/chrome.log" ]; then
         echo "--- chrome.log 末尾 ---" >&2
-        tail -n 60 "${WORK}/chrome.log" >&2
+        tail -n 60 "${WORK}/chrome.log" | grep -v 'DevTools listening on' >&2 || true
       fi
       exit 1
     fi
