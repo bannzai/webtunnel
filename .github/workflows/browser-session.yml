@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       session:
-        description: "セッション名。tailnet ホスト名 webtunnel-<session> になる（小文字英数字とハイフンのみ）"
+        description: "セッション名。tailnet ホスト名 webtunnel-<session>-<run id> になる（小文字英数字とハイフンのみ）"
         required: true
         default: dev
       duration_minutes:
