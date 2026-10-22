@@ -110,7 +110,11 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **ビルドに秘匿の値が要る caller は secret `WEBTUNNEL_SETUP_ENV` を渡す**。Firebase の設定ファイル（API キーを含むため git の管理外）を Secrets から書き出してからビルドするアプリのように、`setup_command` が秘匿の値を要る場合に使う。形式は `WEBTUNNEL_AUTH_ENV` と同じ base64 の `KEY=VALUE` 列で、復号・`::add-mask::` への登録・制御用変数名の除外も同じ処理（`runner/load-env-secret.sh`）を通る（「認証情報の受け渡し」）。`start-dev-server.sh` は復号した値を `setup_command` を実行するサブシェルにだけ export し、`start_command` と `setup_script` には復号前・復号後とも渡さない（ビルドが終われば要らない値を、セッション中動き続ける dev サーバの環境に残さない）。この secret を渡したセッションでは、artifact `dev-server-log-<session>` をアップロードせず、`setup_command` の失敗・dev サーバの起動失敗・セッション中の終了の時もログ末尾を Actions ログに出さない。add-mask が伏字にするのは secret の値そのものだけで、`setup_command` が値から書き出した設定ファイルの中身（ビルドのエラー診断や dev サーバの設定診断に引用されうる）は伏字にならず、artifact のファイル内容はそもそも伏字にならないため。失敗を調べる時は、手元で同じコマンドを実行して再現する。`setup_command` が実行する依存パッケージの install script 等にも値は見えるため、渡すのはビルドに要る開発環境用の値に限る。`setup_command` が空のセッションでは使われない
 
   ```bash
-  printf 'FIREBASE_OPTIONS_DART_BASE64=...\n' | base64 |
+  # 1 行を 1 組の KEY=VALUE として読むため、ファイルを値にする時は改行なしの base64 にする
+  # （GNU base64 は既定で 76 桁ごとに折り返し、2 行目以降が捨てられる）。
+  # ファイルが無い・空のまま登録すると既存の secret を空の値で上書きするため、先に確かめる
+  test -s lib/firebase_options.dart &&
+    printf 'FIREBASE_OPTIONS_DART_BASE64=%s\n' "$(base64 < lib/firebase_options.dart | tr -d '\n')" | base64 |
     gh secret set WEBTUNNEL_SETUP_ENV -R <owner>/<repo>
   ```
 - **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
