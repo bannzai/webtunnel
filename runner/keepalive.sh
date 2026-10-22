@@ -18,7 +18,8 @@ echo "セッション維持: ${DURATION_MINUTES} 分 (CDP port: ${PORT}${WEBTUNN
 while [ "$(date +%s)" -lt "$END" ]; do
   if [ -n "${WEBTUNNEL_DEV_PID:-}" ] && ! kill -0 "$WEBTUNNEL_DEV_PID" 2>/dev/null; then
     echo "dev サーバのプロセスが終了したためセッションを終了する" >&2
-    if [ -f "${WORK}/webtunnel-dev-server.log" ]; then
+    # WEBTUNNEL_SETUP_ENV を渡したセッションでは出さない（理由は start-dev-server.sh の show_log_tail）
+    if [ -f "${WORK}/webtunnel-dev-server.log" ] && [ "${WEBTUNNEL_HAS_SETUP_ENV:-}" != "true" ]; then
       echo "--- dev サーバのログ末尾 ---" >&2
       tail -n 60 "${WORK}/webtunnel-dev-server.log" >&2
     fi

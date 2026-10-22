@@ -40,73 +40,8 @@ run_with_timeout() {
   fi
 }
 
-
-# workflow コマンド（`::add-mask::` 等）のデータ部は runner 側で `%25` / `%0D` / `%0A` が
-# 元の文字へ復元される。エスケープせずに渡すと、`%25` を含む値では登録されるマスクが実値とずれ、
-# 実値がログに出た時に伏字にならない。`%` を先に置換する順序も必須。
-# 参照: https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-commands
-escape_workflow_command_data() {
-  local data=$1
-  data="${data//'%'/%25}"
-  data="${data//$'\r'/%0D}"
-  data="${data//$'\n'/%0A}"
-  printf '%s' "$data"
-}
-
-# 復号した値を add-mask に登録し、環境変数として export する。
-# add-mask はジョブ全体に効くため、以降の step（keepalive の chrome.log 出力等）でも伏字になる。
-load_auth_env() {
-  local decoded line key value
-  if ! decoded="$(printf '%s' "$WEBTUNNEL_AUTH_ENV" | base64 -d 2>/dev/null)"; then
-    warn "secret \`WEBTUNNEL_AUTH_ENV\` を base64 として復号できなかった。認証情報を渡さずにセットアップを続行する。"
-    return 0
-  fi
-
-  local -a names=()
-  while IFS= read -r line || [ -n "$line" ]; do
-    # Windows で作った KEY=VALUE 列は行末に CR が残り、値の一部として export されてしまう
-    line="${line%$'\r'}"
-    [ -n "$line" ] || continue
-    case "$line" in \#*) continue ;; esac
-    # `=` が無い行では ${line%%=*} も ${line#*=} も行全体を返し、KEY=KEY として通ってしまう
-    case "$line" in *=*) ;; *)
-      warn "secret \`WEBTUNNEL_AUTH_ENV\` に \`=\` を含まない行がある。その行を無視する。"
-      continue ;;
-    esac
-    key="${line%%=*}"
-    value="${line#*=}"
-    if [[ ! "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
-      warn "secret \`WEBTUNNEL_AUTH_ENV\` に \`KEY=VALUE\` 形式でない行がある。その行を無視する。"
-      continue
-    fi
-    # GITHUB_ENV / PATH 等の制御用変数を secret の値で上書きされると、このスクリプトや
-    # 後続コマンドの挙動（GitHub の永続化ファイルの行き先・コマンド解決）を乗っ取れてしまう
-    case "$key" in
-      GITHUB_*|RUNNER_*|ACTIONS_*|CI|PATH|HOME|SHELL|BASH_ENV|ENV|LD_*)
-        warn "secret \`WEBTUNNEL_AUTH_ENV\` の \`${key}\` は GitHub Actions・シェルの制御用変数名のため無視する。"
-        continue ;;
-    esac
-    # 最初の `=` 以降は引用符も含めて生の値として扱う（引用符・エスケープの構文は提供しない。
-    # 「気を利かせて」剥がすと、引用符で始まり引用符で終わる正規のパスワードを壊す）
-    # 空値の add-mask は runner が警告を出すだけなので登録しない（export はする）
-    if [ -n "$value" ]; then
-      echo "::add-mask::$(escape_workflow_command_data "$value")"
-    fi
-    # UID 等シェルの readonly 変数名への代入は if 条件の中でもシェルごと中断させる致命エラーになる。
-    # サブシェルで代入可否を先に確かめ、不可なら警告して続行する（step ごと死なせない）
-    if ( export "$key=$value" ) 2>/dev/null; then
-      export "$key=$value"
-      names+=("$key")
-    else
-      warn "secret \`WEBTUNNEL_AUTH_ENV\` の \`${key}\` は export できない変数名（シェルの readonly 等）のため無視する。"
-    fi
-  done < <(printf '%s\n' "$decoded")
-
-  if [ ${#names[@]} -gt 0 ]; then
-    echo "認証情報を環境変数として渡す: ${names[*]}"
-  fi
-  AUTH_ENV_NAMES=("${names[@]}")
-}
+# shellcheck source=runner/load-env-secret.sh
+source "$(dirname "$0")/load-env-secret.sh"
 
 # 復号した資格情報（AUTH_ENV_NAMES の変数）を環境に持ったまま残ったプロセスを SIGKILL で止める。
 # 対象は agent-browser の daemon や、セットアップスクリプトが setsid で切り離した常駐プロセス等で、
@@ -185,7 +120,8 @@ fi
 
 AUTH_ENV_NAMES=()
 if [ -n "${WEBTUNNEL_AUTH_ENV:-}" ]; then
-  load_auth_env
+  load_env_secret WEBTUNNEL_AUTH_ENV "$WEBTUNNEL_AUTH_ENV"
+  AUTH_ENV_NAMES=(${LOADED_ENV_NAMES[@]+"${LOADED_ENV_NAMES[@]}"})
 fi
 
 export WEBTUNNEL_CDP_URL="http://127.0.0.1:${CDP_PORT}"

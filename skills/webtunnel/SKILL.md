@@ -131,7 +131,7 @@ Godot の操作は `scripts/godot-web.sh --session <session> <サブコマンド
 バックエンド構成ごとの目安:
 
 - **認証ビルトインの BaaS（Firebase / Supabase 等）**: dev プロジェクトを分離し、匿名認証か seed 済みテストユーザーで 1 に倒す。webtunnel の都合で本番プロジェクトの匿名認証を新たに有効化しない（API キーは公開情報のため、作り捨てアカウントで無料枠・コストを悪用される面が開く。有効化は App Check / CAPTCHA・レート制限・匿名アカウントの定期削除とセットで判断する）
-- **認証をアプリ層で自作している構成（Turso / SQLite / PostgreSQL 等の DB 単体）**: dev サーバを runner 上で起動し（`setup_command` / `start_command`。PROJECT.md「dev サーバの起動」参照）、ローカル DB ファイルや seed 済み dev DB で完結させる。DB 接続情報が要る場合だけ dev 専用の値を 3 の secret で渡す（`WEBTUNNEL_AUTH_ENV` はログイン資格情報に限らず、セットアップに必要な秘匿値全般を運ぶ封筒として使える）
+- **認証をアプリ層で自作している構成（Turso / SQLite / PostgreSQL 等の DB 単体）**: dev サーバを runner 上で起動し（`setup_command` / `start_command`。PROJECT.md「dev サーバの起動」参照）、ローカル DB ファイルや seed 済み dev DB で完結させる。DB 接続情報が要る場合だけ dev 専用の値を 3 の secret で渡す（`WEBTUNNEL_AUTH_ENV` はログイン資格情報に限らず、セットアップスクリプトに必要な秘匿値全般を運ぶ封筒として使える。`setup_command` のビルドに要る秘匿値（Firebase の設定ファイル等）は secret `WEBTUNNEL_SETUP_ENV` で渡す。PROJECT.md「dev サーバの起動」参照）
 
 どの方式でも守ること:
 

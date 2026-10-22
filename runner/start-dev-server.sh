@@ -3,8 +3,23 @@
 # START_COMMAND が空の場合はセットアップだけ実行して終わる（拡張のビルドだけが要るセッション）。
 # ポートは PORT 環境変数として両コマンドに渡す（session.yml の port input が SSOT）。
 # ログは RUNNER_TEMP に残し、session.yml が artifact にアップロードする。
-# env: START_COMMAND / SETUP_COMMAND（どちらか必須）/ WORKING_DIRECTORY / PORT / READY_PATH
+# secret WEBTUNNEL_SETUP_ENV（base64 の KEY=VALUE 列）は復号して SETUP_COMMAND にだけ環境変数として渡す
+# （参照: PROJECT.md「dev サーバの起動」）。
+# env: START_COMMAND / SETUP_COMMAND（どちらか必須）/ WORKING_DIRECTORY / PORT / READY_PATH /
+#      WEBTUNNEL_SETUP_ENV
 set -euo pipefail
+
+# shellcheck source=runner/load-env-secret.sh
+source "$(dirname "$0")/load-env-secret.sh"
+
+warn() {
+  echo "::warning::$1"
+  {
+    echo "## ⚠️ セットアップ"
+    echo ""
+    echo "$1"
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+}
 
 START_COMMAND="${START_COMMAND:-}"
 SETUP_COMMAND="${SETUP_COMMAND:-}"
@@ -23,6 +38,19 @@ SETUP_LOG="$WORK/webtunnel-dev-server-setup.log"
 LOG="$WORK/webtunnel-dev-server.log"
 READY_URL="http://127.0.0.1:${PORT}${READY_PATH}"
 mkdir -p "$WORK"
+
+# add-mask が伏字にするのは secret の値そのものだけで、setup_command が値から書き出した設定ファイルの中身
+# （ビルドのエラー診断や dev サーバの設定診断に引用されうる）は伏字にならない。
+# WEBTUNNEL_SETUP_ENV を渡したセッションでは、ログ末尾を public な Actions ログに出さない
+show_log_tail() {
+  local label=$1 file=$2
+  if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+    echo "${label}。secret WEBTUNNEL_SETUP_ENV を渡したセッションでは、値から派生した内容が伏字にならないためログを出さない" >&2
+  else
+    echo "${label}。ログ末尾:" >&2
+    tail -n 100 "$file" >&2
+  fi
+}
 
 # HTTP ステータスは問わない（応答がある = dev サーバが listen している）
 responding() {
@@ -60,7 +88,8 @@ export PORT
 # セキュリティ境界ではない（同一 VM・sudo NOPASSWD のため。PROJECT.md「リポジトリ公開に耐える安全性」の 11 参照）
 DECOY_DIR="$WORK/caller-github-files"
 mkdir -p "$DECOY_DIR"
-caller_env=(env
+# 復号前の secret の生値は caller のコマンドへ渡さない（start_command には復号後の値も渡さない）
+caller_env=(env -u WEBTUNNEL_SETUP_ENV
   GITHUB_ENV="$DECOY_DIR/env"
   GITHUB_PATH="$DECOY_DIR/path"
   GITHUB_OUTPUT="$DECOY_DIR/output"
@@ -68,9 +97,15 @@ caller_env=(env
 
 if [ -n "$SETUP_COMMAND" ]; then
   echo "setup: ${SETUP_COMMAND}"
-  "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1 || {
-    echo "setup_command が失敗。ログ末尾:" >&2
-    tail -n 100 "$SETUP_LOG" >&2
+  # 復号した値の export をサブシェルに閉じ、start_command へ引き継がない。
+  # add-mask の行は step の標準出力に出す必要があるため、出力をログへ向けるのは復号の後
+  (
+    if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+      load_env_secret WEBTUNNEL_SETUP_ENV "$WEBTUNNEL_SETUP_ENV"
+    fi
+    exec "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1
+  ) || {
+    show_log_tail "setup_command が失敗" "$SETUP_LOG"
     exit 1
   }
 fi
@@ -93,12 +128,10 @@ for _ in $(seq 1 90); do
     exit 0
   fi
   kill -0 "$DEV_PID" 2>/dev/null || {
-    echo "dev サーバのプロセスが終了した。ログ末尾:" >&2
-    tail -n 100 "$LOG" >&2
+    show_log_tail "dev サーバのプロセスが終了した" "$LOG"
     exit 1
   }
   sleep 2
 done
-echo "dev サーバが ${READY_URL} で応答しない" >&2
-tail -n 100 "$LOG" >&2
+show_log_tail "dev サーバが ${READY_URL} で応答しない" "$LOG"
 exit 1
