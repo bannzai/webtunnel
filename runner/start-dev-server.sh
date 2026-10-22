@@ -3,8 +3,23 @@
 # START_COMMAND が空の場合はセットアップだけ実行して終わる（拡張のビルドだけが要るセッション）。
 # ポートは PORT 環境変数として両コマンドに渡す（session.yml の port input が SSOT）。
 # ログは RUNNER_TEMP に残し、session.yml が artifact にアップロードする。
-# env: START_COMMAND / SETUP_COMMAND（どちらか必須）/ WORKING_DIRECTORY / PORT / READY_PATH
+# secret WEBTUNNEL_SETUP_ENV（base64 の KEY=VALUE 列）は復号して SETUP_COMMAND にだけ環境変数として渡す
+# （参照: PROJECT.md「dev サーバの起動」）。
+# env: START_COMMAND / SETUP_COMMAND（どちらか必須）/ WORKING_DIRECTORY / PORT / READY_PATH /
+#      WEBTUNNEL_SETUP_ENV
 set -euo pipefail
+
+# shellcheck source=runner/load-env-secret.sh
+source "$(dirname "$0")/load-env-secret.sh"
+
+warn() {
+  echo "::warning::$1"
+  {
+    echo "## ⚠️ セットアップ"
+    echo ""
+    echo "$1"
+  } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+}
 
 START_COMMAND="${START_COMMAND:-}"
 SETUP_COMMAND="${SETUP_COMMAND:-}"
@@ -20,6 +35,11 @@ READY_PATH="${READY_PATH:-/}"
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 WORK="${RUNNER_TEMP:-$(pwd)/tmp}"
 SETUP_LOG="$WORK/webtunnel-dev-server-setup.log"
+# 復号した値を環境に持つ setup_command の出力は、session.yml が artifact に上げる glob
+# （webtunnel-dev-server*.log）に掛からない名前に書く。add-mask は artifact のファイル内容を伏字にしないため
+if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+  SETUP_LOG="$WORK/webtunnel-setup-command-with-secret.log"
+fi
 LOG="$WORK/webtunnel-dev-server.log"
 READY_URL="http://127.0.0.1:${PORT}${READY_PATH}"
 mkdir -p "$WORK"
@@ -60,7 +80,8 @@ export PORT
 # セキュリティ境界ではない（同一 VM・sudo NOPASSWD のため。PROJECT.md「リポジトリ公開に耐える安全性」の 11 参照）
 DECOY_DIR="$WORK/caller-github-files"
 mkdir -p "$DECOY_DIR"
-caller_env=(env
+# 復号前の secret の生値は caller のコマンドへ渡さない（start_command には復号後の値も渡さない）
+caller_env=(env -u WEBTUNNEL_SETUP_ENV
   GITHUB_ENV="$DECOY_DIR/env"
   GITHUB_PATH="$DECOY_DIR/path"
   GITHUB_OUTPUT="$DECOY_DIR/output"
@@ -68,7 +89,14 @@ caller_env=(env
 
 if [ -n "$SETUP_COMMAND" ]; then
   echo "setup: ${SETUP_COMMAND}"
-  "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1 || {
+  # 復号した値の export をサブシェルに閉じ、start_command へ引き継がない。
+  # add-mask の行は step の標準出力に出す必要があるため、出力をログへ向けるのは復号の後
+  (
+    if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+      load_env_secret WEBTUNNEL_SETUP_ENV "$WEBTUNNEL_SETUP_ENV"
+    fi
+    exec "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1
+  ) || {
     echo "setup_command が失敗。ログ末尾:" >&2
     tail -n 100 "$SETUP_LOG" >&2
     exit 1

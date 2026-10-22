@@ -83,6 +83,9 @@ on:
       WEBTUNNEL_AUTH_ENV:
         description: "setup_script へ渡す KEY=VALUE 列を base64 で単一行にしたもの（PROJECT.md「ログイン済み状態でのセッション開始」参照）"
         required: false
+      WEBTUNNEL_SETUP_ENV:
+        description: "setup_command（ビルド等）にだけ環境変数として渡す KEY=VALUE 列を base64 で単一行にしたもの。start_command・setup_script には渡らない（PROJECT.md「dev サーバの起動」参照）"
+        required: false
 
 env:
   # CDP の待ち受けポート。local/webtunnel CLI・bridge・keepalive すべてこの値を前提にする
@@ -336,6 +339,7 @@ jobs:
           WORKING_DIRECTORY: ${{ inputs.working_directory }}
           PORT: ${{ inputs.port }}
           READY_PATH: ${{ inputs.ready_path }}
+          WEBTUNNEL_SETUP_ENV: ${{ secrets.WEBTUNNEL_SETUP_ENV }}
         run: ./.webtunnel-runner/runner/start-dev-server.sh
 
       - name: Chromium を起動
@@ -555,7 +559,9 @@ jobs:
       # ただし認証情報を渡したセッションではアップロードしない。dev サーバがリクエスト内容や
       # 認証診断をログへ書くと復号済みの資格情報がファイルに残りうるが、add-mask は Actions ログの
       # 表示にしか効かず artifact のファイル内容は伏字にならない。ログが要るデバッグは
-      # secret を外した構成で再現する
+      # secret を外した構成で再現する。
+      # WEBTUNNEL_SETUP_ENV を渡したセッションでは、start-dev-server.sh が setup_command の出力を
+      # この glob に掛からない名前で書くため、start_command の分だけが上がる
       - name: dev サーバのログを artifact にアップロード
         if: always() && (inputs.start_command != '' || inputs.setup_command != '') && env.WEBTUNNEL_HAS_AUTH_ENV != 'true'
         timeout-minutes: 10
