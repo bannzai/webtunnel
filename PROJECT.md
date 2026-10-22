@@ -106,7 +106,13 @@ agent-browser --session "$(basename "$(git rev-parse --show-toplevel)")" \
 - **ツールチェーン準備は session.yml 側**に持つ。reusable workflow の呼び出しは job 単位で、caller は job の中に step を差し込めないため。Node 以外（Python / Ruby / Go 等）は ubuntu-latest のプリインストール版を `setup_command` から使う
 - **ビルド成果物を artifact 経由で受け取る経路（simtunnel の `app_artifact` 相当）は作らない**。simtunnel でこれが要るのは、macOS runner が高価でビルドを別 job に切り出す動機があり、かつ Flutter 等が `xcodebuild` 直叩きで表現できないため。Web は `setup_command` に任意のシェルコマンドを書けて Linux runner も安価なため、同一 job でビルドすれば足りる。必要になったら caller 側の build job + `download-artifact` を足す
 - `start_url` を省略した時は `http://localhost:<port>/` を開く。dev サーバを起動しない場合だけ `about:blank` になる
-- dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える
+- dev サーバのログ（`setup_command` の分と起動後の分）は artifact `dev-server-log-<session>` に残す。セッション中のランタイムエラーも down 後に追える。ただし `WEBTUNNEL_SETUP_ENV` を渡したセッションの `setup_command` の分は残さない（次の項目）
+- **ビルドに秘匿の値が要る caller は secret `WEBTUNNEL_SETUP_ENV` を渡す**。Firebase の設定ファイル（API キーを含むため git の管理外）を Secrets から書き出してからビルドするアプリのように、`setup_command` が秘匿の値を要る場合に使う。形式は `WEBTUNNEL_AUTH_ENV` と同じ base64 の `KEY=VALUE` 列で、復号・`::add-mask::` への登録・制御用変数名の除外も同じ処理（`runner/load-env-secret.sh`）を通る（「認証情報の受け渡し」）。`start-dev-server.sh` は復号した値を `setup_command` を実行するサブシェルにだけ export し、`start_command` と `setup_script` には復号前・復号後とも渡さない（ビルドが終われば要らない値を、セッション中動き続ける dev サーバの環境に残さない）。`setup_command` の出力は Actions ログでは add-mask で伏字になるが、artifact のファイル内容は伏字にならないため、この secret を渡したセッションでは `setup_command` の出力を artifact の対象外の名前のファイルに書く（失敗時のログ末尾は従来どおり step の出力に出る）。`setup_command` が実行する依存パッケージの install script 等にも値は見えるため、渡すのはビルドに要る開発環境用の値に限る。`setup_command` が空のセッションでは使われない
+
+  ```bash
+  printf 'FIREBASE_OPTIONS_DART_BASE64=...\n' | base64 |
+    gh secret set WEBTUNNEL_SETUP_ENV -R <owner>/<repo>
+  ```
 - **dev サーバは 127.0.0.1 で listen していることを検証してから tailnet に参加する**。0.0.0.0 で listen していると Tailscale 参加後に dev サーバが tailnet へ露出するため、ready 後に `ss` で loopback 以外の listener を検出したら失敗させる（caller は vite の `server.host` や `next dev -H 127.0.0.1` 等で loopback に束縛する）
 - **caller のコマンドを実行する job に OIDC トークンの発行能力を持たせない**。`setup_command` / `start_command` を実行する session job の `permissions` に `id-token` は無く、Tailscale の auth key は caller のコードを実行しない別 job が発行する（「リポジトリ公開に耐える安全性」の 11）。start-dev-server.sh は `GITHUB_ENV` 等を使い捨てファイルへ向けた env で caller を実行するが、これはセキュリティ境界ではない
 - **起動前にポートが応答していたらエラーにする**（冪等成功にしない）。runner は毎回クリーンな VM のため、dev サーバ起動前の応答は別プロセスがポートを握っている異常。成功扱いにすると Chromium が無関係なサービスを開き、監視もされないまま ready になる
@@ -307,6 +313,8 @@ jobs:
       TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
       # ログイン済み状態で始める場合のみ（.webtunnel/setup.sh を置いた repo）
       WEBTUNNEL_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV }}
+      # setup_command（ビルド）に秘匿の値が要る場合のみ（「dev サーバの起動」参照）
+      WEBTUNNEL_SETUP_ENV: ${{ secrets.WEBTUNNEL_SETUP_ENV }}
 ```
 
 ローカル CLI は `WEBTUNNEL_REPO` でアプリ repo に向ける（`WEBTUNNEL_WORKFLOW` は caller workflow のファイル名。既定 `browser-session.yml`）:
@@ -329,6 +337,8 @@ webtunnel/
 │   ├── mint-tailscale-auth-key.sh    # OIDC → Tailscale の auth key を発行し session job の公開鍵で暗号化（caller のコードを実行しない job）
 │   ├── decrypt-tailscale-auth-key.sh # 暗号化した auth key を tailnet 参加の直前に復号
 │   ├── test/test-run-auth-setup.sh   # 資格情報を環境に持つ常駐プロセスだけが止まることの検証（Linux のみ）
+│   ├── test/test-start-dev-server.sh # WEBTUNNEL_SETUP_ENV が setup_command にだけ渡ることの検証
+│   ├── load-env-secret.sh            # base64 の KEY=VALUE 列の secret を復号・add-mask して export する（source して使う）
 │   ├── start-dev-server.sh           # caller repo の dev サーバ起動 + 応答待ち（ログは artifact）
 │   ├── start-chromium.sh             # Xvfb + headed Chromium 起動 + CDP 応答待ち
 │   ├── run-auth-setup.sh             # caller repo のセットアップスクリプト実行（ログイン済み状態を作る）
@@ -553,7 +563,7 @@ Godot の既定の HTML シェルでは、起動に成功すると `#status` 要
 
 ### Phase 2: dev サーバ起動と各アプリ repo への導入手順
 
-- dev サーバ起動の input（`setup_command` / `start_command` / `working_directory` / `port` / `ready_path` / `node_version`）と `runner/start-dev-server.sh`
+- dev サーバ起動の input（`setup_command` / `start_command` / `working_directory` / `port` / `ready_path` / `node_version`）と secret `WEBTUNNEL_SETUP_ENV`、`runner/start-dev-server.sh`
 - ログイン済み状態でのセッション開始（`setup_script` / `WEBTUNNEL_AUTH_ENV`）と `runner/run-auth-setup.sh`・`examples/auth-demo/`
 - 自己検証用のサンプル Web アプリ（`webProject/`）と `browser-session.yml` の `sample_app` input
 - 「新しいプロジェクトに webtunnel を導入する」の手順
