@@ -94,6 +94,7 @@ env:
   PREVIEW_PORT: "9100"
   # secrets コンテキストは step の if で直接参照できないため、有無だけを env に写して判定に使う
   WEBTUNNEL_HAS_AUTH_ENV: ${{ secrets.WEBTUNNEL_AUTH_ENV != '' }}
+  WEBTUNNEL_HAS_SETUP_ENV: ${{ secrets.WEBTUNNEL_SETUP_ENV != '' }}
 
 # 同名セッションの同時起動を防ぐ（同じセッション名に run が 2 つあると、CLI がどちらに接続するか定まらない）。
 # auth key の発行 job も待たせるため workflow 単位に置く。session job だけに置くと、後続の run が
@@ -560,10 +561,10 @@ jobs:
       # 認証診断をログへ書くと復号済みの資格情報がファイルに残りうるが、add-mask は Actions ログの
       # 表示にしか効かず artifact のファイル内容は伏字にならない。ログが要るデバッグは
       # secret を外した構成で再現する。
-      # WEBTUNNEL_SETUP_ENV を渡したセッションでは、start-dev-server.sh が setup_command の出力を
-      # この glob に掛からない名前で書くため、start_command の分だけが上がる
+      # WEBTUNNEL_SETUP_ENV を渡したセッションも同じ理由でアップロードしない（setup_command が値から
+      # 書き出した設定ファイルの中身を、ビルドや dev サーバがログに引用しうる）
       - name: dev サーバのログを artifact にアップロード
-        if: always() && (inputs.start_command != '' || inputs.setup_command != '') && env.WEBTUNNEL_HAS_AUTH_ENV != 'true'
+        if: always() && (inputs.start_command != '' || inputs.setup_command != '') && env.WEBTUNNEL_HAS_AUTH_ENV != 'true' && env.WEBTUNNEL_HAS_SETUP_ENV != 'true'
         timeout-minutes: 10
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

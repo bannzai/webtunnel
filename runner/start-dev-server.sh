@@ -35,14 +35,22 @@ READY_PATH="${READY_PATH:-/}"
 ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 WORK="${RUNNER_TEMP:-$(pwd)/tmp}"
 SETUP_LOG="$WORK/webtunnel-dev-server-setup.log"
-# 復号した値を環境に持つ setup_command の出力は、session.yml が artifact に上げる glob
-# （webtunnel-dev-server*.log）に掛からない名前に書く。add-mask は artifact のファイル内容を伏字にしないため
-if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
-  SETUP_LOG="$WORK/webtunnel-setup-command-with-secret.log"
-fi
 LOG="$WORK/webtunnel-dev-server.log"
 READY_URL="http://127.0.0.1:${PORT}${READY_PATH}"
 mkdir -p "$WORK"
+
+# add-mask が伏字にするのは secret の値そのものだけで、setup_command が値から書き出した設定ファイルの中身
+# （ビルドのエラー診断や dev サーバの設定診断に引用されうる）は伏字にならない。
+# WEBTUNNEL_SETUP_ENV を渡したセッションでは、ログ末尾を public な Actions ログに出さない
+show_log_tail() {
+  local label=$1 file=$2
+  if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+    echo "${label}。secret WEBTUNNEL_SETUP_ENV を渡したセッションでは、値から派生した内容が伏字にならないためログを出さない" >&2
+  else
+    echo "${label}。ログ末尾:" >&2
+    tail -n 100 "$file" >&2
+  fi
+}
 
 # HTTP ステータスは問わない（応答がある = dev サーバが listen している）
 responding() {
@@ -97,14 +105,7 @@ if [ -n "$SETUP_COMMAND" ]; then
     fi
     exec "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1
   ) || {
-    # add-mask が伏字にするのは secret の値そのものだけで、値から書き出した設定ファイルの中身
-    # （コンパイラのエラー診断に引用されうる）は伏字にならないため、public な Actions ログに出さない
-    if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
-      echo "setup_command が失敗。secret WEBTUNNEL_SETUP_ENV を渡したセッションでは、値から派生した内容が伏字にならないためログを出さない" >&2
-    else
-      echo "setup_command が失敗。ログ末尾:" >&2
-      tail -n 100 "$SETUP_LOG" >&2
-    fi
+    show_log_tail "setup_command が失敗" "$SETUP_LOG"
     exit 1
   }
 fi
@@ -127,12 +128,10 @@ for _ in $(seq 1 90); do
     exit 0
   fi
   kill -0 "$DEV_PID" 2>/dev/null || {
-    echo "dev サーバのプロセスが終了した。ログ末尾:" >&2
-    tail -n 100 "$LOG" >&2
+    show_log_tail "dev サーバのプロセスが終了した" "$LOG"
     exit 1
   }
   sleep 2
 done
-echo "dev サーバが ${READY_URL} で応答しない" >&2
-tail -n 100 "$LOG" >&2
+show_log_tail "dev サーバが ${READY_URL} で応答しない" "$LOG"
 exit 1

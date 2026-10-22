@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # runner/start-dev-server.sh が secret WEBTUNNEL_SETUP_ENV を setup_command にだけ環境変数として渡し、
-# start_command・ログ（artifact に上がる名前のファイル）には渡さないことを検証する。
+# start_command と、public な Actions ログに出すログ末尾には渡さないことを検証する。
 set -uo pipefail
 
 SCRIPT=$(cd "$(dirname "$0")/.." && pwd -P)/start-dev-server.sh
@@ -50,7 +50,6 @@ assert "start_command に復号前の secret を渡さない" 0 "$(grep -c '^WEB
 assert "値を add-mask に登録する行を step の標準出力に出す" 1 "$(grep -cx "::add-mask::${SECRET_VALUE}" "$TMP/out.log")"
 # ::add-mask:: の行は runner が値を伏字にするための登録で、ログには表示されないため除く
 assert "値を step の出力に平文で出さない" 0 "$(grep -v '^::add-mask::' "$TMP/out.log" | grep -c "$SECRET_VALUE")"
-assert "artifact に上がる名前のログに値を書かない" 0 "$(cat "$TMP"/runner-temp/webtunnel-dev-server*.log | grep -c "$SECRET_VALUE")"
 kill "$(cat "$TMP/dev.pid")" 2>/dev/null
 
 # 止めた dev サーバがポートを離す前に次の実行が始まると、start-dev-server.sh の起動前の応答確認で失敗するため別のポートにする
@@ -59,7 +58,6 @@ run_dev_server "" "$START_COMMAND"
 assert "WEBTUNNEL_SETUP_ENV なしで start-dev-server.sh が成功する" 0 $?
 assert "WEBTUNNEL_SETUP_ENV なしでは値を渡さない" 0 "$(grep -c '^WEBTUNNEL_TEST_SETUP_VALUE=' "$TMP/setup.env")"
 assert "WEBTUNNEL_SETUP_ENV なしでは add-mask を出さない" 0 "$(grep -c '^::add-mask::' "$TMP/out.log")"
-assert "WEBTUNNEL_SETUP_ENV なしでは setup_command のログを artifact に上がる名前で書く" 1 "$(ls "$TMP"/runner-temp/webtunnel-dev-server-setup.log 2>/dev/null | wc -l | tr -d ' ')"
 kill "$(cat "$TMP/dev.pid")" 2>/dev/null
 
 # マーカーは printf で組み立て、start-dev-server.sh が出す「setup: <コマンド>」の行に一致させない。
@@ -72,6 +70,15 @@ assert "WEBTUNNEL_SETUP_ENV ありでは setup_command の失敗ログを step �
 run_dev_server "" "" 'printf "setup-log-%s\n" marker; exit 1'
 assert "WEBTUNNEL_SETUP_ENV なしで setup_command が失敗すると start-dev-server.sh も失敗する" 1 $?
 assert "WEBTUNNEL_SETUP_ENV なしでは setup_command の失敗ログ末尾を step の出力に出す" 1 "$(grep -c 'setup-log-marker' "$TMP/out.log")"
+
+# setup_command が値から書き出した設定を dev サーバが診断として出力して終了する場合の代わり
+FAILING_START='printf "start-log-%s\n" marker; exit 1'
+run_dev_server "$ENCODED" "$FAILING_START" 'true'
+assert "WEBTUNNEL_SETUP_ENV ありで dev サーバが終了すると start-dev-server.sh も失敗する" 1 $?
+assert "WEBTUNNEL_SETUP_ENV ありでは dev サーバのログ末尾を step の出力に出さない" 0 "$(grep -c 'start-log-marker' "$TMP/out.log")"
+
+run_dev_server "" "$FAILING_START" 'true'
+assert "WEBTUNNEL_SETUP_ENV なしでは dev サーバのログ末尾を step の出力に出す" 1 "$(grep -c 'start-log-marker' "$TMP/out.log")"
 
 echo "PASS: ${PASS} / FAIL: ${FAIL}"
 [ "$FAIL" -eq 0 ]
