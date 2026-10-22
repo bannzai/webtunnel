@@ -26,11 +26,11 @@ assert() {
 
 # setup_command / start_command は TMP を cwd にして実行させ、見えた環境変数をファイルに書かせる
 run_dev_server() {
-  local setup_env=$1 start_command=$2
+  local setup_env=$1 start_command=$2 setup_command=${3:-'env > setup.env'}
   rm -f "$TMP"/*.env "$TMP"/*.log "$TMP/dev.pid"
   GITHUB_WORKSPACE="$TMP" WORKING_DIRECTORY=. RUNNER_TEMP="$TMP/runner-temp" GITHUB_STEP_SUMMARY="$TMP/summary.md" \
     PORT="$PORT" WEBTUNNEL_SETUP_ENV="$setup_env" \
-    SETUP_COMMAND='env > setup.env' START_COMMAND="$start_command" \
+    SETUP_COMMAND="$setup_command" START_COMMAND="$start_command" \
     bash "$SCRIPT" > "$TMP/out.log" 2>&1
 }
 
@@ -61,6 +61,17 @@ assert "WEBTUNNEL_SETUP_ENV なしでは値を渡さない" 0 "$(grep -c '^WEBTU
 assert "WEBTUNNEL_SETUP_ENV なしでは add-mask を出さない" 0 "$(grep -c '^::add-mask::' "$TMP/out.log")"
 assert "WEBTUNNEL_SETUP_ENV なしでは setup_command のログを artifact に上がる名前で書く" 1 "$(ls "$TMP"/runner-temp/webtunnel-dev-server-setup.log 2>/dev/null | wc -l | tr -d ' ')"
 kill "$(cat "$TMP/dev.pid")" 2>/dev/null
+
+# マーカーは printf で組み立て、start-dev-server.sh が出す「setup: <コマンド>」の行に一致させない。
+# 値から派生した内容（add-mask の対象外）をエラー診断として出力して失敗するビルドの代わり
+FAILING_SETUP='echo "derived-$(printf %s "$WEBTUNNEL_TEST_SETUP_VALUE" | rev)"; printf "setup-log-%s\n" marker; exit 1'
+run_dev_server "$ENCODED" "" "$FAILING_SETUP"
+assert "WEBTUNNEL_SETUP_ENV ありで setup_command が失敗すると start-dev-server.sh も失敗する" 1 $?
+assert "WEBTUNNEL_SETUP_ENV ありでは setup_command の失敗ログを step の出力に出さない" 0 "$(grep -c 'setup-log-marker' "$TMP/out.log")"
+
+run_dev_server "" "" 'printf "setup-log-%s\n" marker; exit 1'
+assert "WEBTUNNEL_SETUP_ENV なしで setup_command が失敗すると start-dev-server.sh も失敗する" 1 $?
+assert "WEBTUNNEL_SETUP_ENV なしでは setup_command の失敗ログ末尾を step の出力に出す" 1 "$(grep -c 'setup-log-marker' "$TMP/out.log")"
 
 echo "PASS: ${PASS} / FAIL: ${FAIL}"
 [ "$FAIL" -eq 0 ]

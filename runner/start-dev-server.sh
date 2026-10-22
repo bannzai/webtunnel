@@ -97,8 +97,14 @@ if [ -n "$SETUP_COMMAND" ]; then
     fi
     exec "${caller_env[@]}" bash -c "$SETUP_COMMAND" >"$SETUP_LOG" 2>&1
   ) || {
-    echo "setup_command が失敗。ログ末尾:" >&2
-    tail -n 100 "$SETUP_LOG" >&2
+    # add-mask が伏字にするのは secret の値そのものだけで、値から書き出した設定ファイルの中身
+    # （コンパイラのエラー診断に引用されうる）は伏字にならないため、public な Actions ログに出さない
+    if [ -n "${WEBTUNNEL_SETUP_ENV:-}" ]; then
+      echo "setup_command が失敗。secret WEBTUNNEL_SETUP_ENV を渡したセッションでは、値から派生した内容が伏字にならないためログを出さない" >&2
+    else
+      echo "setup_command が失敗。ログ末尾:" >&2
+      tail -n 100 "$SETUP_LOG" >&2
+    fi
     exit 1
   }
 fi
