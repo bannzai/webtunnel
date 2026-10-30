@@ -1,8 +1,9 @@
-# managed-by: setup-ci (bannzai/castle)
 name: ブラウザ E2E
 
+# E2E は PR ごとに起動せず、必要な時に gh workflow run ci-e2e.yml --ref <ブランチ> で起動する
+# (方針: bannzai/castle の setup-ci skill references/ci-design.md の 2。起票元: https://github.com/bannzai/castle/issues/2302 )
 on:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
